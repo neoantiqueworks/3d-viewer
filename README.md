@@ -10,6 +10,64 @@ with three.js as static files only, hosted on GitHub Pages.
 | `link-builder.html` | Internal tool: paste a Drive link, get the viewer link. |
 | `drive-test.html` | Diagnostic page from Phase 1, kept for troubleshooting. |
 | `record-test.html` | Diagnostic page: what MediaRecorder and the share sheet actually do on a given phone. Groundwork for Phase 3. |
+| `version.json` | The current version string, nothing else. Every page checks it on startup and reloads once if it is behind. |
+
+## Deploying: the self-update check
+
+GitHub Pages sends `Cache-Control: max-age=600` and that header cannot be
+changed. Samsung Internet holds pages longer still, and a tab that is already
+open serves from memory cache indefinitely. This bit us twice: a deploy went out,
+the origin was verifiably correct, and the phone kept showing the previous build.
+
+So every page now checks for itself. On startup it fetches `version.json` with
+`cache: 'no-store'` **and** a unique timestamp in the query string, because
+either one alone has been seen to be ignored. If the served version differs from
+the page's own, the page reloads once with `_v=<new version>` appended, keeping
+every existing parameter.
+
+**The loop guard is the `_v` parameter itself.** A reload happens only when `_v`
+is absent or carries a *different* version from the one just fetched. That gives
+three properties worth stating:
+
+- each version causes at most one reload;
+- a page still stale after its reload, because a cache will not let go, carries
+  on rather than looping forever;
+- a bookmarked link holding an old `_v` still updates, because `_v` is compared
+  against the fetched version rather than merely tested for presence.
+
+Anything unexpected means carrying on with the page as it is: a failed fetch, a
+2 second timeout, an empty file. The check is started *before* the model request
+but is deliberately not awaited, so the two run in parallel and it can never
+delay the model. The only way it interrupts anything is by reloading.
+
+With `debug=1` the viewer logs the page version, the served version and the
+decision it made.
+
+### When you change a version
+
+`VIEWER_VERSION` must be bumped and `version.json` updated **in the same
+commit**, along with the `PAGE_VERSION` constants in the two diagnostic pages.
+Four places:
+
+| File | Constant |
+| --- | --- |
+| `version.json` | the whole file |
+| `viewer.html` | `VIEWER_VERSION` |
+| `record-test.html` | `PAGE_VERSION` |
+| `link-builder.html` | `PAGE_VERSION` |
+
+A disagreement would either make every phone reload forever or never update at
+all, so this is enforced by the harness rather than left to discipline: the core
+regression fails if `version.json` and `VIEWER_VERSION` differ, and the
+self-update harness additionally checks all three pages and asserts the shared
+check block is byte-identical across them.
+
+The three pages share one version string. That means a change to only
+`record-test.html` still bumps the viewer, costing one unnecessary reload. That
+is the price of a single `version.json`, and it is cheap.
+
+If you ever need to force a specific build by hand, `_v` is a safe parameter to
+set yourself: the viewer never reads it as a setting.
 
 ## Target browsers
 

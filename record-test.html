@@ -183,6 +183,9 @@
      CONFIG
      ======================================================================= */
 
+  // Must match version.json at the repo root, in the same commit.
+  var PAGE_VERSION = '2026-10-08b';
+
   var RECORD_SECONDS = 5;        // length of the automatic test recording
   var RECORD_FPS = 25;           // frame rate requested from captureStream
 
@@ -219,6 +222,82 @@
     'audio/webm',
     'audio/ogg;codecs=opus'
   ];
+
+  /* =======================================================================
+     SELF-UPDATE CHECK
+
+     GitHub Pages sends Cache-Control: max-age=600 and that header cannot be
+     changed, while Samsung Internet holds pages for longer still, so a phone can
+     keep showing an old build after a deploy. This asks the server which version
+     is current and reloads once if this page is behind.
+
+     version.json is fetched with cache 'no-store' AND a unique timestamp in the
+     query string, because either one alone has been seen to be ignored.
+
+     The loop guard is the _v parameter in the URL. A reload happens only when _v
+     is absent or carries a DIFFERENT version from the one just fetched, so:
+       - each version causes at most one reload;
+       - a page still stale after its reload (a cache that will not let go)
+         carries on rather than looping;
+       - a bookmarked link holding an old _v still updates, because _v is
+         compared against the fetched version rather than merely tested for
+         presence.
+
+     Anything unexpected means carrying on with the page as it is: a failed
+     fetch, a timeout, an empty file. The check never blocks what the page is
+     doing; it is started alongside the main work and only interrupts to reload.
+
+     const is used here rather than this file's usual var so the block can stay
+     byte-identical across all three pages.
+     ======================================================================= */
+  const VERSION_FILE = 'version.json';
+  const VERSION_PARAM = '_v';
+  const VERSION_TIMEOUT_MS = 2000;
+
+  function checkForNewVersion(pageVersion, logLine) {
+    const requestUrl = VERSION_FILE + '?t=' + Date.now();
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const timer = setTimeout(function () {
+      if (controller) controller.abort();
+    }, VERSION_TIMEOUT_MS);
+
+    fetch(requestUrl, {
+      cache: 'no-store',
+      signal: controller ? controller.signal : undefined
+    }).then(function (response) {
+      clearTimeout(timer);
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      return response.text();
+    }).then(function (text) {
+      // Tolerant parse: accepts the version with or without JSON quotes.
+      const latest = text.trim().replace(/^"/, '').replace(/"$/, '').trim();
+      logLine('version check: page ' + pageVersion + ', server ' + (latest || '(empty)'));
+
+      if (!latest) {
+        logLine('version check: empty version file, continuing');
+        return;
+      }
+      if (latest === pageVersion) {
+        logLine('version check: up to date');
+        return;
+      }
+
+      const target = new URL(location.href);
+      if (target.searchParams.get(VERSION_PARAM) === latest) {
+        logLine('version check: already reloaded for ' + latest +
+          ' and still stale, continuing');
+        return;
+      }
+
+      logLine('version check: stale, reloading once with ' + VERSION_PARAM + '=' + latest);
+      target.searchParams.set(VERSION_PARAM, latest);
+      // replace, not assign, so Back does not bounce through the stale copy.
+      location.replace(target.toString());
+    }).catch(function (err) {
+      clearTimeout(timer);
+      logLine('version check: skipped (' + (err && err.name ? err.name : 'error') + ')');
+    });
+  }
 
   /* =======================================================================
      LOGGING
@@ -896,6 +975,10 @@
      STARTUP
      ======================================================================= */
   scanEnvironment();
+
+  // Same self-update check as the viewer; this page is diagnostic, so a stale
+  // copy would be actively misleading.
+  checkForNewVersion(PAGE_VERSION, function (line) { log(line); });
 })();
 </script>
 </body>
