@@ -5,7 +5,9 @@
 <!-- user-scalable=no stops double-tap page zoom so all gestures reach the canvas.
      viewport-fit=cover lets the layout use the full screen on notched phones. -->
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<meta name="theme-color" content="#e8e8ea">
+<!-- Tints the browser UI to match the top of the gradient. Kept in sync with
+     CONFIG.background by applyBackground(). -->
+<meta name="theme-color" content="#15161a">
 <title>3D Viewer</title>
 
 <!--
@@ -30,13 +32,24 @@
     --edge-bottom: calc(env(safe-area-inset-bottom, 0px) + var(--gap));
     --edge-left:   calc(env(safe-area-inset-left, 0px) + var(--gap));
     --edge-right:  calc(env(safe-area-inset-right, 0px) + var(--gap));
+
+    /* The two gradient stops of the active background. applyBackground() keeps
+       these in sync with CONFIG.background, so the overlay screens and the
+       very first paint match what the canvas renders.
+
+       The values here are the DARK preset, because the default material is
+       chrome and chrome's default background is dark. Matching the pre-script
+       state to the common case avoids a flash from light to dark while
+       three.js is still loading. */
+    --bg-top: #15161a;
+    --bg-bottom: #0d0e11;
   }
 
   html, body {
     margin: 0;
     height: 100%;
     overflow: hidden;
-    background: #e8e8ea;
+    background: linear-gradient(var(--bg-top), var(--bg-bottom));
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     -webkit-tap-highlight-color: transparent;
     -webkit-user-select: none;
@@ -140,9 +153,11 @@
     box-shadow: 0 0 0 3px #1b1c20, 0 0 0 5px rgba(255, 255, 255, 0.85);
   }
 
-  /* Background preset swatches are literal previews of the two backgrounds. */
-  #bgLight { background: #e8e8ea; }
-  #bgDark  { background: #15161a; }
+  /* Background preset swatches are literal previews of the two backgrounds,
+     gradient included. The real values are written in from CONFIG at startup;
+     these are only the pre-script defaults. */
+  #bgLight { background: linear-gradient(#eae2d5, #d7d0c4); }
+  #bgDark  { background: linear-gradient(#15161a, #0d0e11); }
 
   /* ---- Overlays: loading, error, end screen --------------------------- */
   .overlay {
@@ -177,9 +192,14 @@
     min-height: 16px;
   }
 
-  /* Error and end screen share one calm, text-light card style. */
-  #error, #endScreen { background: #e8e8ea; color: #2a2d31; }
-  body.bg-dark #error, body.bg-dark #endScreen { background: #15161a; color: #e9eaec; }
+  /* Error and end screen share one calm, text-light card style. They reuse the
+     same gradient variables, so these screens match the viewer background
+     instead of introducing a third look. */
+  #error, #endScreen {
+    background: linear-gradient(var(--bg-top), var(--bg-bottom));
+    color: #2a2d31;
+  }
+  body.bg-dark #error, body.bg-dark #endScreen { color: #e9eaec; }
   .message {
     max-width: 19em;
     font-size: 17px;
@@ -250,7 +270,7 @@
 
 <!-- state-loading is set here too, so the spinner state is correct in the first
      frame, before the module script runs. -->
-<body class="bg-light state-loading">
+<body class="bg-dark state-loading">
 
 <!-- 3D view -->
 <canvas id="view"></canvas>
@@ -267,8 +287,8 @@
 
   <!-- Top left: background presets, light then dark -->
   <div class="cluster at-top-left">
-    <button id="bgLight" class="swatch" type="button" aria-pressed="true"  aria-label="Light background"></button>
-    <button id="bgDark"  class="swatch" type="button" aria-pressed="false" aria-label="Dark background"></button>
+    <button id="bgLight" class="swatch" type="button" aria-pressed="false" aria-label="Light background"></button>
+    <button id="bgDark"  class="swatch" type="button" aria-pressed="true"  aria-label="Dark background"></button>
   </div>
 
   <!-- Top right: close -->
@@ -405,11 +425,27 @@
     toneMappingExposure: 1.0,
 
     /* ---- Backgrounds ---------------------------------------------------
-       Plain colors, not environment maps, so switching costs nothing. */
+       A subtle vertical gradient per preset, slightly darker toward the
+       bottom. Tweak the two stops of either preset here; everything else
+       follows, including the round preview buttons, the overlay screens and
+       the browser UI tint.
+
+       The gradient is drawn INSIDE the WebGL canvas as scene.background, not
+       as CSS behind the canvas, for two reasons. It is then part of the
+       rendered frame, so Share captures it exactly as seen on screen. And
+       three.js skips tone mapping for a background texture tagged as sRGB, so
+       these hex values reach the screen unshifted.
+
+       This does not light anything: reflections and material response come
+       from scene.environment, which the background never touches. */
     background: {
-      light: '#e8e8ea',
-      dark:  '#15161a'
+      light: { top: '#eae2d5', bottom: '#d7d0c4' },
+      dark:  { top: '#15161a', bottom: '#0d0e11' }
     },
+
+    // Height in pixels of the gradient ramp texture. Taller means a smoother
+    // ramp with less visible banding; 1 px wide is all that is needed.
+    backgroundGradientHeight: 512,
 
     /* ---- Reflection environment ----------------------------------------
        RoomEnvironment is built procedurally inside three.js and baked once
@@ -424,6 +460,11 @@
        One entry per round swatch at the bottom left, in display order.
        swatch is only the button color; the rest drives the real material.
 
+       defaultBackground is the background this material looks best against.
+       Tapping a material button switches to it. The customer can still pick
+       the other background afterwards, and that choice holds until the next
+       material tap.
+
        None of the three uses a texture map, so nothing here depends on UV
        coordinates. Aged bronze gets its variation from a procedural 3D
        noise field evaluated in world space (see PATINA SHADER below), which
@@ -433,6 +474,7 @@
       chrome: {
         label: 'Chrome',
         swatch: '#d9dadc',
+        defaultBackground: 'dark',
         color: '#ffffff',
         metalness: 1.0,
         roughness: 0.05,
@@ -442,6 +484,7 @@
       bronze: {
         label: 'Aged bronze',
         swatch: '#6b4a2b',
+        defaultBackground: 'dark',
         colorHigh: '#8a6436',   // rubbed, exposed bronze
         colorLow:  '#3a2a1a',   // dark oxidized patina
         metalness: 0.9,
@@ -457,6 +500,7 @@
       anthracite: {
         label: 'Anthracite',
         swatch: '#3a3d40',
+        defaultBackground: 'light',
         color: '#34373a',
         metalness: 0.55,
         roughness: 0.4,
@@ -486,8 +530,11 @@
   /* Valid URL parameter values. Anything else falls back to the default
      silently, because the customer can do nothing about a bad link. */
   const MATERIAL_KEYS = ['chrome', 'bronze', 'anthracite'];
+  const BACKGROUND_KEYS = ['light', 'dark'];
   const DEFAULT_MATERIAL = 'chrome';
-  const DEFAULT_BACKGROUND = 'light';
+  // There is no single default background: each material carries its own in
+  // CONFIG.materials[key].defaultBackground. A bg parameter overrides that for
+  // the initial state only.
 
   const DRACO_DECODER_PATH =
     'https://cdn.jsdelivr.net/npm/three@' + CONFIG.threeVersion +
@@ -572,10 +619,14 @@
     ? requestedMaterial
     : DEFAULT_MATERIAL;
 
+  // An explicit bg wins over the starting material's own default, but only for
+  // the initial state: the next material tap applies that material's default
+  // again.
   const requestedBackground = params.get('bg');
-  let backgroundKey = (requestedBackground === 'light' || requestedBackground === 'dark')
+  const backgroundExplicit = BACKGROUND_KEYS.includes(requestedBackground);
+  let backgroundKey = backgroundExplicit
     ? requestedBackground
-    : DEFAULT_BACKGROUND;
+    : CONFIG.materials[materialKey].defaultBackground;
 
   /* =========================================================================
      SCREENS
@@ -657,15 +708,70 @@
   keyLight.position.set(0.6, 1.0, 0.8);
   camera.add(keyLight);
 
+  /* Builds one background gradient as a 1 x N canvas texture. One pixel wide
+     is enough: the gradient only varies vertically, and the full screen quad
+     three.js uses for a texture background stretches it across the whole
+     width whatever the aspect ratio is.
+
+     Orientation: Texture.flipY defaults to true, so canvas row 0 is uploaded
+     to the top of the screen, which is where the "top" color belongs.
+
+     Tagging the texture as sRGB is load bearing. three.js derives the
+     background material's toneMapped flag from the texture color space, so an
+     sRGB texture bypasses ACES tone mapping and the configured hex values
+     reach the screen exactly as written. */
+  function createBackgroundTexture(spec) {
+    const ramp = document.createElement('canvas');
+    ramp.width = 1;
+    ramp.height = CONFIG.backgroundGradientHeight;
+
+    const ctx = ramp.getContext('2d');
+    const gradient = ctx.createLinearGradient(0, 0, 0, ramp.height);
+    gradient.addColorStop(0, spec.top);
+    gradient.addColorStop(1, spec.bottom);
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, ramp.width, ramp.height);
+
+    const texture = new THREE.CanvasTexture(ramp);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.generateMipmaps = false;          // pointless for a 1 x N ramp
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.wrapS = THREE.ClampToEdgeWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+    return texture;
+  }
+
+  // Both gradients are built once at startup and only swapped on toggle.
+  const backgroundTextures = {
+    light: createBackgroundTexture(CONFIG.background.light),
+    dark: createBackgroundTexture(CONFIG.background.dark)
+  };
+
   function applyBackground(key) {
     backgroundKey = key;
-    scene.background = new THREE.Color(CONFIG.background[key]);
+    const spec = CONFIG.background[key];
+
+    // scene.background is the rendered backdrop only. scene.environment, which
+    // drives the reflections and the material look, is deliberately untouched.
+    scene.background = backgroundTextures[key];
+
     document.body.classList.toggle('bg-light', key === 'light');
     document.body.classList.toggle('bg-dark', key === 'dark');
+
+    // The overlay screens and the first paint before WebGL starts read these,
+    // so the whole page matches the canvas.
+    document.documentElement.style.setProperty('--bg-top', spec.top);
+    document.documentElement.style.setProperty('--bg-bottom', spec.bottom);
+
+    // The browser UI tints itself with the color at the top of the page.
     document.querySelector('meta[name="theme-color"]')
-      .setAttribute('content', CONFIG.background[key]);
-    bgButtons.light.setAttribute('aria-pressed', String(key === 'light'));
-    bgButtons.dark.setAttribute('aria-pressed', String(key === 'dark'));
+      .setAttribute('content', spec.top);
+
+    for (const k of BACKGROUND_KEYS) {
+      bgButtons[k].setAttribute('aria-pressed', String(k === key));
+    }
+    log('Background: ' + key);
   }
 
   window.addEventListener('resize', () => {
@@ -886,7 +992,14 @@
      ========================================================================= */
   let currentModel = null;
 
-  function applyMaterial(key) {
+  /* Applies one preset to the whole model.
+
+     followDefaultBackground is true for every material button tap, which is
+     what makes the background follow the material. It is false only when the
+     link carried an explicit bg, so that choice survives the initial apply.
+     A background the customer then picks by hand simply holds until the next
+     material tap. */
+  function applyMaterial(key, followDefaultBackground = true) {
     materialKey = key;
     if (currentModel) {
       currentModel.traverse((o) => { if (o.isMesh) o.material = materials[key]; });
@@ -895,6 +1008,10 @@
       materialButtons[k].setAttribute('aria-pressed', String(k === key));
     }
     log('Material: ' + CONFIG.materials[key].label);
+
+    if (followDefaultBackground) {
+      applyBackground(CONFIG.materials[key].defaultBackground);
+    }
   }
 
   /* =========================================================================
@@ -1204,10 +1321,13 @@
     materialButtons[key].style.background = CONFIG.materials[key].swatch;
     materialButtons[key].addEventListener('click', () => applyMaterial(key));
   }
-  bgButtons.light.style.background = CONFIG.background.light;
-  bgButtons.dark.style.background = CONFIG.background.dark;
-  bgButtons.light.addEventListener('click', () => applyBackground('light'));
-  bgButtons.dark.addEventListener('click', () => applyBackground('dark'));
+  // The background buttons preview the real gradient, both stops included.
+  for (const key of BACKGROUND_KEYS) {
+    const spec = CONFIG.background[key];
+    bgButtons[key].style.background =
+      'linear-gradient(' + spec.top + ', ' + spec.bottom + ')';
+    bgButtons[key].addEventListener('click', () => applyBackground(key));
+  }
 
   document.getElementById('shareBtn').addEventListener('click', onShareClicked);
   document.getElementById('closeBtn').addEventListener('click', onCloseClicked);
@@ -1221,8 +1341,13 @@
   log('three.js r' + THREE.REVISION + ' ready. Protocol ' + location.protocol);
 
   buildEnvironment();
-  applyBackground(backgroundKey);
-  applyMaterial(materialKey);
+
+  // applyMaterial pulls in the material's own default background. The only
+  // exception is a link that named a background explicitly, which is then
+  // applied on its own afterwards.
+  applyMaterial(materialKey, !backgroundExplicit);
+  if (backgroundExplicit) applyBackground(backgroundKey);
+
   showScreen('main');
 
   if (!modelId) {

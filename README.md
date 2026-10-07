@@ -25,11 +25,32 @@ https://neoantiqueworks.github.io/3d-viewer/viewer.html?model=DRIVE_FILE_ID
 | --- | --- | --- | --- |
 | `model` | Drive file ID | (required) | Which GLB to load. A full Drive share link is also accepted. |
 | `mat` | `chrome`, `bronze`, `anthracite` | `chrome` | Material shown on arrival. |
-| `bg` | `light`, `dark` | `light` | Background shown on arrival. |
+| `bg` | `light`, `dark` | follows the material | Background shown on arrival. Overrides the material's own default, for the initial state only. |
 
 Invalid values fall back to the default silently, because the customer cannot
 do anything about a bad link. Use `link-builder.html` to build these links
 instead of writing them by hand.
+
+### Background follows the material
+
+Each material declares the background it looks best against, as
+`defaultBackground` next to that material in `CONFIG`:
+
+| Material | Default background |
+| --- | --- |
+| Chrome | Dark |
+| Aged bronze | Dark |
+| Anthracite | Light |
+
+Tapping a material button applies the material **and** switches to that
+material's background. The customer can then override it with the two
+background buttons, and that choice holds until the next material tap, which
+applies the new material's default again.
+
+On arrival the background follows the starting material, so a plain
+`?model=...` link opens chrome on dark. A `bg` parameter overrides that for the
+initial state only; from the first material tap onwards the material decides
+again.
 
 ### The screen
 
@@ -73,6 +94,31 @@ Reflections come from `RoomEnvironment`, which three.js builds procedurally
 and bakes into a small cubemap once at startup. No HDRI file is downloaded, so
 phones get metal reflections with no extra network traffic.
 
+### Backgrounds
+
+Each background is a subtle vertical gradient, slightly darker toward the
+bottom, with both stops in `CONFIG.background`:
+
+| Preset | Top | Bottom |
+| --- | --- | --- |
+| Light | `#eae2d5` | `#d7d0c4` |
+| Dark | `#15161a` | `#0d0e11` |
+
+The gradient is drawn **inside the WebGL canvas** as `scene.background`, not as
+CSS behind the canvas. That is deliberate for two reasons:
+
+- Share reads the canvas, so a CSS background would be missing from the shared
+  image. Rendering it in the canvas means the screenshot matches the screen.
+- three.js derives the background material's tone mapping from the texture
+  color space, so tagging the gradient as sRGB bypasses ACES tone mapping and
+  the configured hex values arrive on screen unshifted.
+
+It is a backdrop only. Reflections and material response come from
+`scene.environment`, which the background never touches, so switching the
+background cannot change how a material looks. The overlay screens and the
+browser UI tint follow the same two values through the `--bg-top` and
+`--bg-bottom` CSS variables.
+
 Every tunable value lives in the single `CONFIG` block at the top of the
 module script in `viewer.html`: the API key, both background colors, all
 material values, the share image format and the camera framing.
@@ -102,6 +148,11 @@ Internal tool. Paste a Drive share link or a bare file ID, pick the starting
 material and background, and copy the finished viewer link. A parameter is
 only added to the link when the choice differs from the viewer's own default,
 so the common case stays short.
+
+The background selector has three options. **Auto (follows material)** is the
+default and adds no `bg` parameter, which is what lets each material's own
+default background apply. Light and Dark force the starting background
+instead.
 
 This page makes no network requests and contains no API key: it only parses a
 string and builds a URL. `VIEWER_URL` at the top of its script is the only

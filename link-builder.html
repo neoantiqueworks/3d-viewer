@@ -149,13 +149,21 @@
     </div>
   </section>
 
-  <!-- Step 3: starting background -->
+  <!-- Step 3: starting background. "Auto" is the default and adds no bg
+       parameter, which lets each material's own default background apply. -->
   <section>
     <h2>3. Starting background</h2>
     <div class="options" id="backgroundOptions">
-      <button type="button" data-value="light" aria-pressed="true">Light (default)</button>
+      <button type="button" data-value="auto"  aria-pressed="true">Auto (follows material)</button>
+      <button type="button" data-value="light" aria-pressed="false">Light</button>
       <button type="button" data-value="dark"  aria-pressed="false">Dark</button>
     </div>
+    <p class="hint">
+      Auto lets the viewer decide: chrome and aged bronze open on the dark
+      background, anthracite on the light one. Light or Dark forces the
+      starting background instead; the customer can still change it, and it
+      follows the material again from the next material tap.
+    </p>
   </section>
 
   <!-- Step 4: the finished link -->
@@ -186,8 +194,12 @@
   // These must match the defaults inside viewer.html. A parameter is left out
   // of the link whenever the choice equals the default, which keeps the
   // common link short.
+  //
+  // 'auto' is not a value viewer.html accepts: it stands for the ABSENCE of a
+  // bg parameter, which is what lets each material's own default background
+  // apply. Treating it as the default here is what leaves bg out of the link.
   var DEFAULT_MATERIAL = 'chrome';
-  var DEFAULT_BACKGROUND = 'light';
+  var DEFAULT_BACKGROUND = 'auto';
 
   /* =======================================================================
      STATE AND ELEMENTS
