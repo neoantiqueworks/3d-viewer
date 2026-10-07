@@ -6,15 +6,10 @@ with three.js as static files only, hosted on GitHub Pages.
 
 | File | Purpose |
 | --- | --- |
-| `viewer.html` | The customer-facing viewer, built on Fluent UI Web Components. This is the page you send out, and where all future work goes. |
-| `viewer-classic.html` | The earlier hand-rolled UI, kept for comparison and as a fallback. Same behaviour. |
+| `viewer.html` | The customer-facing viewer. The only viewer. |
 | `link-builder.html` | Internal tool: paste a Drive link, get the viewer link. |
 | `drive-test.html` | Diagnostic page from Phase 1, kept for troubleshooting. |
 | `record-test.html` | Diagnostic page: what MediaRecorder and the share sheet actually do on a given phone. Groundwork for Phase 3. |
-
-Both viewers are generated from one set of shared blocks, and a parity harness
-asserts that fourteen behavioural regions are byte-identical between them, so
-only the UI layer differs.
 
 ## Target browsers
 
@@ -259,92 +254,32 @@ This page makes no network requests and contains no API key: it only parses a
 string and builds a URL. `VIEWER_URL` at the top of its script is the only
 thing to change if the GitHub Pages address ever changes.
 
-## The Fluent UI layer
+## Fluent UI: tried and removed
 
-`viewer.html` is built on [Fluent UI Web Components](https://github.com/microsoft/fluentui)
-v3. `viewer-classic.html` keeps the earlier hand-rolled UI with identical
-behaviour, for comparison and as a fallback.
+An earlier build layered Fluent UI Web Components v3 on this page, loaded from
+CDN with no bundler. It was removed, and the reasoning is worth keeping.
 
-### Loading without a bundler
+Once every control had to be painted into a canvas to survive Samsung Internet's
+forced dark mode, Fluent stopped contributing anything visible. Its surfaces live
+in shadow DOM styled by CSS tokens, which is exactly what gets rewritten, and a
+page cannot paint into another element's shadow root. So the buttons became
+`appearance="transparent"` shells wrapped around canvas, and `fluent-spinner` and
+`fluent-text` had to be replaced by canvas painting for the same reason. What was
+left was the interaction model: semantics, focus behaviour and the pressed
+animation.
 
-The package README documents a single pre-bundled module script from CDN. Exact
-versions are pinned:
+On the device the two builds were **indistinguishable**. Against that, Fluent
+cost 86 KB gzipped (`web-components-all.min.js` 73,399 B plus `@fluentui/tokens`
+12,566 B, about 20 percent on top of the 419 KB the page already fetches for
+three.js), from a second CDN origin that the UI could not render without, and it
+depended on a tokens package published only under a `1.0.0-alpha` tag. It also
+blocked the page's own `touch-action` and tap-highlight rules from reaching the
+controls.
 
-| Module | Purpose |
-| --- | --- |
-| `@fluentui/web-components@3.1.3/dist/web-components-all.min.js` | Registers every component and exports `setTheme`. |
-| `@fluentui/tokens@1.0.0-alpha.24/+esm` | Supplies `webLightTheme` and `webDarkTheme`. |
-
-Both were checked to be self-contained, with no bare import specifiers, so a
-browser loads them directly with no import map. Note that `setTheme` lives in the
-main package but the themes do **not**, and that the tokens package is still
-published only under an alpha tag.
-
-Theming is required rather than optional: the components are styled entirely
-through CSS variables that `setTheme` writes. `applyFluentTheme()` is called from
-`applyBackground()`, so the theme follows the active background, and it is
-wrapped in `try`/`catch` because a CDN failure must not take the 3D view down.
-
-### Brand colour
-
-`CONFIG.ui.brandColor`, default `#5b5fc7`, is the single source. It tints every
-icon button and the active ring on the material swatches, and after each
-`setTheme` call `applyBrandTokens()` overwrites the Fluent brand tokens with it,
-so the light and dark themes share one brand. The hover and pressed shades are
-derived from it, so changing the one value moves everything.
-
-Those tokens are written to `document.body`, which is the element `setTheme`
-targets by default; a value set higher up would lose to it.
-
-White glyphs on `#5b5fc7` measure **5.38:1**, comfortably past the 3:1 a glyph
-needs, and the ratio does not change between themes because the disc colour is
-fixed. The selected background button uses a light ring instead of a brand ring,
-since a brand ring on a brand disc would be invisible.
-
-### What Fluent actually provides here
-
-This is worth being precise about, because the forced-dark work changed it.
-Fluent's own surfaces live in shadow DOM styled by CSS tokens, which is exactly
-what Samsung Internet rewrites, and shadow DOM cannot be painted into from the
-page. So the buttons use `appearance="transparent"` and the visible disc is the
-canvas slotted inside them.
-
-What Fluent contributes is therefore the interaction model rather than the
-fill: component semantics, keyboard and focus behaviour, and the pressed
-animation. `fluent-spinner` and `fluent-text` were dropped for the same reason
-and replaced by canvas painting.
-
-If you would rather have Fluent's own spinner and text visuals and accept that a
-forced dark mode will recolour them, that is a one-line change back.
-
-### Download cost
-
-Measured, not estimated:
-
-| Module | Raw | Gzip |
-| --- | --- | --- |
-| `web-components-all.min.js` | 308,613 B | 73,399 B |
-| `@fluentui/tokens` | 78,456 B | 12,566 B |
-| **Fluent total** | **387,069 B** | **85,965 B** |
-| three.js (`three.module.js` + `three.core.js`), for scale | 2,120,885 B | 419,512 B |
-
-About **86 KB gzipped**, roughly a 20 percent increase over what the page already
-downloads, from a second CDN origin. `viewer-classic.html` has no such
-dependency, which is part of why it is kept.
-
-### Remaining risks on phones
-
-- **Shadow DOM blocks the page's touch CSS.** `touch-action: manipulation` and
-  `-webkit-tap-highlight-color` do not reach Fluent's internal control, so
-  double-tap zoom and tap highlight on the buttons may differ from
-  `viewer-classic.html`.
-- **The UI depends on a second CDN.** If jsDelivr fails for the Fluent modules
-  the 3D view and every handler still work, but the controls stay invisible.
-- **Button sizing** relies on `::part(control)` being exposed to stretch the
-  internal control to the host size.
-
-The `debug=1` diagnostics report which build is running, the brand colour, and
-whether `fluent-button` actually registered.
+What survived the removal is `CONFIG.ui.brandColor` (`#5b5fc7`), which tints every
+icon button and the active rings, and the Fluent System Icon path data, which is
+inlined and filled into canvas with `Path2D`. three.js is now the only CDN
+dependency.
 
 ## Phase 3 groundwork: record capability test (`record-test.html`)
 
@@ -428,6 +363,93 @@ parameters were the cause.
 strips parameters, and `shareFile()` normalises the type at the share boundary,
 which is the single door every shared file goes through, including Phase 3's
 recorded video.
+
+## Phase 3: the edit screen
+
+Inside `viewer.html`, same page, no navigation. The **Edit** button at the bottom
+centre of the main screen opens it.
+
+### What it does
+
+Edit freezes the current view as a still, gradient background included, and shows
+it full screen with a drawing layer on top. Orbit is disabled while editing.
+
+| Position | Control |
+| --- | --- |
+| Left column, bottom to top | Pen, Undo, Clear, pen colour |
+| Bottom centre | Record voice |
+| Bottom right | Share |
+| Top right | Close |
+
+Every control is canvas-painted like the main screen: a brand-coloured disc with
+a white glyph. The pen colour button carries a ring in the current colour, and
+tapping it reveals a row of six: red (default), blue, yellow, green, black,
+white.
+
+The pen sits at the bottom of the column, nearest the thumb, which is why the
+column is `column-reverse` with the DOM in pen, undo, clear, colour order.
+
+### Recording
+
+While voice records, the drawing canvas records too, so the result is **one**
+video containing the image, any strokes drawn meanwhile, and the voice.
+
+The record button becomes a red stop disc with a visible `mm:ss` timer. Tapping
+it ends the recording. Starting a new one replaces the previous. The maximum
+length is `CONFIG.edit.maxRecordSeconds`, default 120 s, enforced with an
+automatic stop.
+
+Three details that matter:
+
+- **The file is finalized on Stop, not on Share.** `navigator.share` has to be
+  called synchronously inside the tap, and that cannot be done after awaiting a
+  recorder stop. Building the File in `onstop` is what makes the share path work.
+- **The recording is not taken at device pixel size.** A separate canvas is
+  capped to `CONFIG.edit.recordLongSide` (default 1280) on its long side, with
+  both dimensions forced even because H.264 encoders commonly require it, and the
+  edit canvas is copied into it each frame. The shared still image is unaffected
+  and keeps the full display resolution.
+- **That per-frame copy also keeps the stream alive.** A canvas that is never
+  drawn to can stop producing frames for `captureStream`, which a static
+  annotated image would otherwise do.
+
+Format chain, from `CONFIG.edit.videoTypes`: MP4 first, then the best video type
+the browser supports. If none works, the record button shows a clear disabled
+state (a greyed disc with a slashed microphone) and only the annotated image can
+be shared. No separate audio file, no transcoding.
+
+The microphone is requested on the first tap of the record button and never
+before. If it is denied, the button goes to the same disabled state and drawing
+and image sharing keep working.
+
+### Sharing and closing
+
+Share sends the video if a recording exists, otherwise the annotated image at
+full display resolution. Every shared file gets a plain MIME type and a matching
+extension, via `plainMimeType()` and `extensionForType()`.
+
+After sharing, the edit screen **stays open and the recording is kept**, so it can
+be sent more than once. Only **Close** discards the recording and the strokes;
+re-entering Edit starts from a fresh capture of the current view.
+
+### Strokes
+
+Strokes are data, not pixels: each is a colour, a width and a list of points, and
+every change redraws from the still and replays them. Undo is a pop, Clear empties
+the list. Points are stored **normalised** to the canvas, so a rotation or resize
+replays them in the right place.
+
+### Debug output
+
+With `debug=1`, the edit screen logs the chosen recorder type and the type the
+recorder actually used, the recorded byte size and duration, the recording canvas
+dimensions against the configured cap, the microphone outcome and track settings,
+the stroke count when sharing an image, the shared file name, type and size, and
+`navigator.userActivation.isActive` at the moment of each share call.
+
+At startup the diagnostics also report `MediaRecorder`, `captureStream`,
+`getUserMedia` and `canShare` availability, which of the configured video types
+this browser supports, and the recording cap settings.
 
 ## Phase 1: Drive fetch test (`drive-test.html`)
 

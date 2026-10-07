@@ -15,29 +15,17 @@
      This page already has its own light and dark backgrounds, so the automatic
      treatment must be switched off. -->
 <meta name="color-scheme" content="only light">
-<title>3D Viewer (Fluent)</title>
+<title>3D Viewer</title>
 
 <!--
   ===========================================================================
-  FLUENT VARIANT
-
-  Same page as viewer.html, with the UI layer rebuilt on Fluent UI Web
-  Components v3. Everything else is identical and derived from that file: the
-  CONFIG block, DEBUG and debug=1, the URL parameters, the gradient
-  backgrounds, the per-material default background, the patina shader, the
-  Drive fetch, share and close.
-
-  Loading without a bundler, per the official README: a single pre-bundled
-  module script from CDN. dist/web-components-all.min.js was verified to be
-  self-contained (no bare import specifiers, so a browser can load it
-  directly), to register every component, and to export setTheme. The themes
-  themselves live in the separate @fluentui/tokens package, which is still
-  published under an alpha tag.
-
-  Fluent components used: fluent-button for every icon button, fluent-spinner
-  for loading, fluent-text for the two message screens. The material swatches
-  stay custom, because a colour circle is the control, but they are sized and
-  focus-ringed from Fluent tokens so they match.
+  One viewer, no UI framework. An earlier build layered Fluent UI Web
+  Components on top of this, but once every control had to be painted into a
+  canvas to survive Samsung Internet's forced dark mode, Fluent's surfaces
+  (which live in shadow DOM styled by CSS tokens, and cannot be painted into
+  from the page) stopped contributing anything visible. On the device the two
+  builds were indistinguishable, so the framework and its two CDN modules were
+  removed and this file is the single viewer.
   ===========================================================================
 -->
 
@@ -167,35 +155,6 @@
      .overlay[hidden] and #debugLog[hidden] rules below are now redundant. */
   [hidden] { display: none !important; }
 
-  /* ---- Fluent components ---------------------------------------------
-     Custom elements are unknown to the parser until the module registers them,
-     and an unknown element is display:inline with no styling, so they are
-     hidden until :defined matches to avoid a flash of unstyled controls.
-
-     The buttons use appearance="transparent" and are sized here, with their
-     internal control stretched to fill the host. Fluent's own surface is
-     deliberately left transparent: the visible disc is the canvas inside the
-     button, which is what makes it immune to a forced dark mode. */
-  fluent-button:not(:defined) { visibility: hidden; }
-
-  fluent-button.iconBtn, fluent-button.swatch {
-    display: block;
-    line-height: 0;
-  }
-  fluent-button.iconBtn { width: var(--btn); height: var(--btn); min-width: var(--btn); }
-  fluent-button.swatch  { width: var(--swatch); height: var(--swatch); min-width: var(--swatch); }
-  fluent-button.iconBtn::part(control),
-  fluent-button.swatch::part(control) {
-    width: 100%;
-    height: 100%;
-    min-width: 0;
-    padding: 0;
-    border: 0;
-    border-radius: 50%;
-    background: transparent;
-  }
-  fluent-button.iconBtn > canvas, fluent-button.swatch > canvas { display: block; }
-
   /* ---- Controls, painted on canvas -----------------------------------
      Every coloured control is a transparent shell wrapping a canvas, and the
      canvas is the entire visual. This is deliberate: Samsung Internet's dark
@@ -296,6 +255,46 @@
      carries a colour that a forced dark mode could rewrite. */
   #error, #endScreen { background: transparent; }
 
+  /* ---- Edit screen ----------------------------------------------------
+     The frozen view and every stroke live in one canvas, because that is what
+     captureStream records: image and annotations have to share a surface to end
+     up in one video file. */
+  #editScreen { background: transparent; }
+  #editCanvas {
+    position: absolute;
+    display: block;
+    touch-action: none;            /* strokes, not scrolling */
+  }
+
+  /* The edit screen has its own bars, laid out like the main screen's. */
+  #editUi {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 22;
+  }
+  #editUi .group > * { pointer-events: auto; }
+
+  /* The left column runs bottom to top: pen, undo, clear, colour. Children are
+     in that DOM order and column-reverse puts the first one at the bottom,
+     nearest the thumb. */
+  #editUi .toolColumn {
+    flex-direction: column-reverse;
+    align-items: flex-start;
+  }
+  #editUi .bar-bottom { align-items: end; }
+
+  /* The six pen colours, revealed by the colour button. Positioned from the
+     colour button's own rect at runtime rather than from a calc, so adding a
+     tool to the column cannot misplace it. */
+  #penColorRow {
+    position: fixed;
+    display: flex;
+    gap: var(--group-gap);
+    z-index: 23;
+    pointer-events: auto;
+  }
+
   /* ---- Debug log (only inserted when DEBUG is true) ------------------- */
   #debugLog {
     position: fixed;
@@ -357,12 +356,9 @@
 -->
 <div id="ui">
 
-     The buttons are Fluent components with appearance="transparent", so Fluent
-     supplies the semantics, the focus behaviour and the pressed animation while
-     the visible disc is painted into the canvas inside each one. That split is
-     what keeps the Fluent interaction model and still survives a forced dark
-     mode, which would otherwise recolour Fluent's own surfaces through its
-     design tokens.
+     Plain buttons wrapping a canvas. The canvas is the entire visual,
+     because a forced dark mode rewrites CSS colours but cannot touch
+     canvas pixels.
 
   <!-- ===== Top bar: background presets at the left, close at the right ===== -->
   <div class="bar bar-top">
@@ -371,8 +367,8 @@
        active one gets a light ring, which reads against the brand disc where a
        brand ring would not. -->
   <div class="group group-start">
-    <fluent-button id="bgLight" class="iconBtn" appearance="transparent" shape="circular" icon-only aria-pressed="false" aria-label="Light background"><canvas aria-hidden="true"></canvas></fluent-button>
-    <fluent-button id="bgDark" class="iconBtn" appearance="transparent" shape="circular" icon-only aria-pressed="true" aria-label="Dark background"><canvas aria-hidden="true"></canvas></fluent-button>
+    <button id="bgLight" class="iconBtn" type="button" aria-pressed="false" aria-label="Light background"><canvas aria-hidden="true"></canvas></button>
+    <button id="bgDark" class="iconBtn" type="button" aria-pressed="true" aria-label="Dark background"><canvas aria-hidden="true"></canvas></button>
   </div>
 
   <!-- Nothing in the middle of the top bar; the spacer keeps the grid at three
@@ -381,7 +377,7 @@
 
   <!-- Close -->
   <div class="group group-end" id="closeGroup">
-    <fluent-button id="closeBtn" class="iconBtn" appearance="transparent" shape="circular" icon-only aria-label="Close"><canvas aria-hidden="true"></canvas></fluent-button>
+    <button id="closeBtn" class="iconBtn" type="button" aria-label="Close"><canvas aria-hidden="true"></canvas></button>
   </div>
 
   </div><!-- /bar-top -->
@@ -393,20 +389,19 @@
        painted with its own material colour and, when active, a ring in the
        brand colour. -->
   <div class="group group-start" id="matGroup">
-    <fluent-button id="matChrome" class="swatch" appearance="transparent" shape="circular" icon-only aria-pressed="true" aria-label="Chrome"><canvas aria-hidden="true"></canvas></fluent-button>
-    <fluent-button id="matBronze" class="swatch" appearance="transparent" shape="circular" icon-only aria-pressed="false" aria-label="Aged bronze"><canvas aria-hidden="true"></canvas></fluent-button>
-    <fluent-button id="matAnthracite" class="swatch" appearance="transparent" shape="circular" icon-only aria-pressed="false" aria-label="Anthracite"><canvas aria-hidden="true"></canvas></fluent-button>
+    <button id="matChrome" class="swatch" type="button" aria-pressed="true" aria-label="Chrome"><canvas aria-hidden="true"></canvas></button>
+    <button id="matBronze" class="swatch" type="button" aria-pressed="false" aria-label="Aged bronze"><canvas aria-hidden="true"></canvas></button>
+    <button id="matAnthracite" class="swatch" type="button" aria-pressed="false" aria-label="Anthracite"><canvas aria-hidden="true"></canvas></button>
   </div>
 
-  <!-- Center: Edit. Phase 3 feature, hidden until that screen exists. The
-       hidden attribute is enforced by the [hidden] rule in the styles. -->
+  <!-- Center: Edit. Opens the edit screen in this same page. -->
   <div class="group group-center" id="centerGroup">
-    <fluent-button id="editBtn" class="iconBtn" appearance="transparent" shape="circular" icon-only aria-label="Edit" hidden><canvas aria-hidden="true"></canvas></fluent-button>
+    <button id="editBtn" class="iconBtn" type="button" aria-label="Edit"><canvas aria-hidden="true"></canvas></button>
   </div>
 
   <!-- Share -->
   <div class="group group-end" id="shareGroup">
-    <fluent-button id="shareBtn" class="iconBtn" appearance="transparent" shape="circular" icon-only aria-label="Share"><canvas aria-hidden="true"></canvas></fluent-button>
+    <button id="shareBtn" class="iconBtn" type="button" aria-label="Share"><canvas aria-hidden="true"></canvas></button>
   </div>
 
   </div><!-- /bar-bottom -->
@@ -427,14 +422,53 @@
 <div id="error" class="overlay" hidden>
   <canvas id="errorCanvas" class="overlayCanvas" aria-hidden="true"></canvas>
   <p class="srOnly" id="errorText">This model could not be loaded. Please check your connection and try again.</p>
-  <fluent-button id="retryBtn" class="overlayBtn" appearance="transparent" aria-label="Try again"></fluent-button>
+  <button id="retryBtn" class="overlayBtn" type="button" aria-label="Try again"></button>
+</div>
+
+<!-- Edit screen. Same page, no navigation: the frozen view fills the canvas
+     and every control is painted, exactly as on the main screen. -->
+<div id="editScreen" class="overlay" hidden>
+  <canvas id="editCanvas"></canvas>
+
+  <div id="editUi">
+
+    <div class="bar bar-top">
+      <div class="group group-start"></div>
+      <div class="group group-center"></div>
+      <div class="group group-end">
+        <button id="editCloseBtn" class="iconBtn" type="button" aria-label="Close editing"><canvas aria-hidden="true"></canvas></button>
+      </div>
+    </div>
+
+    <div class="bar bar-bottom">
+      <!-- Bottom to top: pen, undo, clear, colour. -->
+      <div class="group group-start toolColumn">
+        <button id="penBtn" class="iconBtn" type="button" aria-pressed="true" aria-label="Pen"><canvas aria-hidden="true"></canvas></button>
+        <button id="undoBtn" class="iconBtn" type="button" aria-label="Undo last stroke"><canvas aria-hidden="true"></canvas></button>
+        <button id="clearBtn" class="iconBtn" type="button" aria-label="Clear all strokes"><canvas aria-hidden="true"></canvas></button>
+        <button id="penColorBtn" class="iconBtn" type="button" aria-expanded="false" aria-label="Pen colour"><canvas aria-hidden="true"></canvas></button>
+      </div>
+
+      <div class="group group-center">
+        <button id="recordBtn" class="iconBtn recordBtn" type="button" aria-label="Record voice"><canvas aria-hidden="true"></canvas></button>
+      </div>
+
+      <div class="group group-end">
+        <button id="editShareBtn" class="iconBtn" type="button" aria-label="Share"><canvas aria-hidden="true"></canvas></button>
+      </div>
+    </div>
+
+    <!-- Filled from CONFIG.edit.penColors at startup. -->
+    <div id="penColorRow" hidden></div>
+
+  </div>
 </div>
 
 <!-- End screen, shown when window.close() is not permitted by the browser -->
 <div id="endScreen" class="overlay" hidden>
   <canvas id="endCanvas" class="overlayCanvas" aria-hidden="true"></canvas>
   <p class="srOnly" id="endText">You can close this page now.</p>
-  <fluent-button id="reopenBtn" class="overlayBtn" appearance="transparent" aria-label="Open again"></fluent-button>
+  <button id="reopenBtn" class="overlayBtn" type="button" aria-label="Open again"></button>
 </div>
 
 <!--
@@ -473,17 +507,6 @@
   import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
   import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
-  /* ---- Fluent UI Web Components -------------------------------------------
-     The official no-bundler route from the package README: one pre-bundled
-     module from CDN, pinned to an exact version. This single file registers
-     every Fluent component as a side effect and exports setTheme.
-
-     The theme objects are in a different package, @fluentui/tokens, which at
-     the time of writing is only published under an alpha tag. That is the
-     supported way to get webLightTheme and webDarkTheme. */
-  import { setTheme } from 'https://cdn.jsdelivr.net/npm/@fluentui/web-components@3.1.3/dist/web-components-all.min.js';
-  import { webLightTheme, webDarkTheme } from 'https://cdn.jsdelivr.net/npm/@fluentui/tokens@1.0.0-alpha.24/+esm';
-
   /* =========================================================================
      CONFIG
      Everything tweakable lives here. DEBUG is the only switch that changes
@@ -501,7 +524,7 @@
 
   // Bumped by hand when something ships, and printed in the diagnostics, so a
   // stale cached page can be told apart from a current one at a glance.
-  const VIEWER_VERSION = '2026-10-07d-fluent';
+  const VIEWER_VERSION = '2026-10-08a';
 
   const CONFIG = {
 
@@ -610,8 +633,7 @@
 
     /* ---- UI ------------------------------------------------------------
        brandColor tints every icon button and the active ring on the material
-       swatches. In the Fluent build it is also pushed into the Fluent brand
-       tokens, so the light and dark themes share one brand.
+       swatches, and the edit screen reuses it for every control there.
 
        White on #5b5fc7 measures 5.4 to 1, comfortably past the 3 to 1 a glyph
        needs, and it does not change with the theme because the disc colour is
@@ -638,6 +660,42 @@
       mimeType: 'image/jpeg',
       quality: 0.92,
       fileName: 'model-view.jpg'
+    },
+
+    /* ---- Edit screen ---------------------------------------------------
+       The six pen colours in the order the row shows them; the first is the
+       default. Everything the recorder needs is here too. */
+    edit: {
+      penColors: ['#e5342b', '#2f6fe0', '#f2c230', '#2faa54', '#15161a', '#ffffff'],
+      penWidth: 4,                 // stroke width in CSS pixels
+      maxRecordSeconds: 120,       // automatic stop
+      recordFps: 25,
+
+      /* The recording is NOT taken at the device pixel size. The long side is
+         capped here, and both dimensions are forced even because H.264
+         encoders commonly require it. The shared still image is unaffected and
+         keeps the full display resolution. */
+      recordLongSide: 1280,
+
+      /* Tried in order; the first the browser supports wins. MP4 leads because
+         it is what WhatsApp accepts, confirmed working on Samsung Internet 30
+         (Chromium 143) on a Galaxy S25 Ultra. If none of these is supported the
+         record button goes to a disabled state and only the annotated image can
+         be shared: no separate audio file and no transcoding. */
+      videoTypes: [
+        'video/mp4;codecs="avc1.42E01E,mp4a.40.2"',
+        'video/mp4;codecs=avc1,mp4a.40.2',
+        'video/mp4;codecs=avc1',
+        'video/mp4',
+        'video/webm;codecs="vp9,opus"',
+        'video/webm;codecs="vp8,opus"',
+        'video/webm'
+      ],
+
+      imageType: 'image/jpeg',
+      imageQuality: 0.92,
+      fileBase: 'model-note',      // extension is derived from the real type
+      recordingDisc: '#d93025'     // the stop disc while recording
     },
 
     /* ---- Camera framing ------------------------------------------------- */
@@ -767,15 +825,19 @@
   function showScreen(name) {
     currentScreen = name;
     const isMain = (name === 'main');
+    const isEdit = (name === 'edit');
 
-    // Canvas and buttons belong to the main screen only.
+    // The WebGL canvas and the main bars belong to the main screen only. On the
+    // edit screen the frozen still stands in for the 3D view.
     canvas.style.visibility = isMain ? 'visible' : 'hidden';
     uiLayer.hidden = !isMain;
+    editScreenEl.hidden = !isEdit;
     endScreenEl.hidden = (name !== 'end');
 
     // Rendering is pointless off the main screen and costs battery.
     if (isMain) startRenderLoop(); else stopRenderLoop();
     repaintOverlays();
+    if (isEdit) repaintEditControls();
     log('Screen: ' + name);
   }
 
@@ -900,11 +962,6 @@
     // The painted controls carry the selection state and the message screens
     // use this gradient, so both are redrawn.
     repaintUi();
-
-    // Fluent theme follows the background, so the component tokens that drive
-    // the button surfaces and focus rings stay legible against it.
-    applyFluentTheme(key);
-
     log('Background: ' + key);
   }
 
@@ -916,6 +973,14 @@
     // The button sizes are clamp()ed against viewport width and the message
     // screens are full bleed, so everything painted has to be redrawn.
     repaintUi();
+
+    // The edit canvas covers the viewport, so it is rebuilt and replayed. The
+    // strokes are stored normalised, which is what makes that safe.
+    if (currentScreen === 'edit' && editStill) {
+      layoutEditCanvas();
+      redrawEdit();
+      repaintEditControls();
+    }
   });
 
   /* Render loop. Kept running on the main screen because OrbitControls
@@ -1371,6 +1436,22 @@
     return String(type || '').split(';')[0].trim().toLowerCase();
   }
 
+  /* Keeps the file name honest: the extension always matches the plain type.
+     Both halves matter for the share sheet, which is keyed on them. */
+  function extensionForType(type) {
+    const map = {
+      'video/mp4': '.mp4',
+      'video/quicktime': '.mov',
+      'video/webm': '.webm',
+      'video/x-matroska': '.mkv',
+      'image/jpeg': '.jpg',
+      'image/png': '.png',
+      'audio/mp4': '.m4a',
+      'audio/webm': '.weba'
+    };
+    return map[plainMimeType(type)] || '';
+  }
+
   function dataUrlToFile(dataUrl, name) {
     const comma = dataUrl.indexOf(',');
     const header = dataUrl.slice(0, comma);
@@ -1452,80 +1533,6 @@
   }
 
   /* =========================================================================
-     PHASE 3 HOOKS (not implemented)
-     The edit screen will live in this same page:
-       - showScreen('edit') gets an 'edit' branch next to 'main' and 'end'.
-       - captureStill() already produces the frozen frame the drawing layer
-         will sit on top of.
-       - shareFile(file, onShared) already handles any file type, so the
-         recorded video goes through it unchanged, and onShared is where the
-         recording gets deleted and the edit screen closed.
-     The Edit button exists in the markup with the hidden attribute and is
-     deliberately not wired up yet.
-     ========================================================================= */
-
-  /* =========================================================================
-     FLUENT THEME
-     setTheme writes the Fluent design tokens as CSS variables, which is what
-     the component internals and the custom swatches both read. It is wrapped
-     because a CDN failure here must not take the viewer down: the 3D view and
-     every handler still work with unstyled controls.
-     ========================================================================= */
-  function applyFluentTheme(key) {
-    try {
-      setTheme(key === 'dark' ? webDarkTheme : webLightTheme);
-      applyBrandTokens();
-      log('Fluent theme: ' + (key === 'dark' ? 'webDarkTheme' : 'webLightTheme') +
-        ' with brand ' + CONFIG.ui.brandColor);
-    } catch (err) {
-      log('Fluent setTheme failed: ' + (err && err.message ? err.message : String(err)), 'err');
-    }
-  }
-
-  /* setTheme writes the stock Fluent brand ramp, so the brand tokens are
-     overwritten straight afterwards with CONFIG.ui.brandColor. Both themes get
-     the same brand, which is what keeps the controls one colour in light and
-     dark. The hover and pressed shades are derived from it so they stay in
-     family with whatever brandColor is set to.
-
-     These are written to document.body because that is the element setTheme
-     targets by default; a value set higher up would lose to it. */
-  function applyBrandTokens() {
-    const brand = CONFIG.ui.brandColor;
-    const tokens = {
-      colorBrandBackground: brand,
-      colorBrandBackgroundHover: shade(brand, 0.14),
-      colorBrandBackgroundPressed: shade(brand, -0.20),
-      colorBrandBackgroundSelected: shade(brand, 0.08),
-      colorBrandBackgroundStatic: brand,
-      colorNeutralForegroundOnBrand: CONFIG.ui.iconColor,
-      colorCompoundBrandStroke: brand,
-      colorCompoundBrandStrokeHover: shade(brand, 0.14),
-      colorCompoundBrandStrokePressed: shade(brand, -0.20),
-      colorBrandStroke1: brand,
-      colorBrandForeground1: brand,
-      colorBrandForegroundLink: brand
-    };
-    for (const [name, value] of Object.entries(tokens)) {
-      document.body.style.setProperty('--' + name, value);
-    }
-  }
-
-  /* Confirms the bundle really did register the components. The bundle is
-     documented to define them as a side effect, but if that ever stops being
-     true the controls would silently stay unstyled inline elements, so the
-     result is reported rather than assumed. */
-  function checkFluentRegistration() {
-    if (!DEBUG) return;
-    const expected = ['fluent-button', 'fluent-spinner', 'fluent-text'];
-    for (const tag of expected) {
-      const defined = customElements.get(tag) !== undefined;
-      log('custom element ' + tag + ': ' + (defined ? 'registered' : 'NOT REGISTERED'),
-        defined ? 'ok' : 'err');
-    }
-  }
-
-  /* =========================================================================
      FORCED DARK MODE IMMUNITY
 
      Samsung Internet's dark mode rewrites CSS colours and ignores the
@@ -1545,7 +1552,13 @@
     edit: 'M20.95 3.05a3.6 3.6 0 0 0-5.06 0L3.94 15c-.4.4-.7.92-.82 1.48l-1.1 4.6a.75.75 0 0 0 .9.9l4.6-1.1A3 3 0 0 0 9 20.07L20.95 8.11a3.6 3.6 0 0 0 0-5.06m-4 1.06a2.08 2.08 0 1 1 2.94 2.94l-.89.89L16.06 5zM15 6.06 17.94 9l-10 10a1.6 1.6 0 0 1-.76.43l-3.42.8.82-3.4q.1-.45.42-.77z',
     retry: 'M12 4.5a7.5 7.5 0 1 0 7.42 6.4c-.07-.46.26-.9.72-.9.37 0 .7.26.76.62q.1.67.1 1.38a9 9 0 1 1-3-6.7V4.24a.75.75 0 0 1 1.5 0v3c0 .41-.34.75-.75.75h-3a.75.75 0 0 1 0-1.5h1.35a7.5 7.5 0 0 0-5.1-2',
     sunny: 'M12 2c.41 0 .75.34.75.75v1.5a.75.75 0 0 1-1.5 0v-1.5c0-.41.34-.75.75-.75m0 15a5 5 0 1 0 0-10 5 5 0 0 0 0 10m0-1.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7m9.25-2.75a.75.75 0 0 0 0-1.5h-1.5a.75.75 0 0 0 0 1.5zM12 19c.41 0 .75.34.75.75v1.5a.75.75 0 0 1-1.5 0v-1.5c0-.41.34-.75.75-.75m-7.75-6.25a.75.75 0 0 0 0-1.5h-1.5a.75.75 0 0 0 0 1.5zm-.03-8.53c.3-.3.77-.3 1.06 0l1.5 1.5a.75.75 0 0 1-1.06 1.06l-1.5-1.5a.75.75 0 0 1 0-1.06m1.06 15.56a.75.75 0 1 1-1.06-1.06l1.5-1.5a.75.75 0 1 1 1.06 1.06zm14.5-15.56a.75.75 0 0 0-1.06 0l-1.5 1.5a.75.75 0 0 0 1.06 1.06l1.5-1.5c.3-.3.3-.77 0-1.06m-1.06 15.56a.75.75 0 1 0 1.06-1.06l-1.5-1.5a.75.75 0 1 0-1.06 1.06z',
-    moon: 'M20.03 17a10 10 0 0 1-16.9.68.75.75 0 0 1 .36-1.13c3.77-1.35 5.79-2.91 6.96-5.15 1.23-2.35 1.55-4.93.69-8.46A.75.75 0 0 1 11.9 2 10 10 0 0 1 20.03 17m-8.25-4.9c-1.25 2.39-3.31 4.1-6.82 5.5a8.5 8.5 0 0 0 13.77-1.35 8.5 8.5 0 0 0-5.9-12.63c.64 3.39.22 6.05-1.05 8.48'
+    moon: 'M20.03 17a10 10 0 0 1-16.9.68.75.75 0 0 1 .36-1.13c3.77-1.35 5.79-2.91 6.96-5.15 1.23-2.35 1.55-4.93.69-8.46A.75.75 0 0 1 11.9 2 10 10 0 0 1 20.03 17m-8.25-4.9c-1.25 2.39-3.31 4.1-6.82 5.5a8.5 8.5 0 0 0 13.77-1.35 8.5 8.5 0 0 0-5.9-12.63c.64 3.39.22 6.05-1.05 8.48',
+    pen: 'M20.95 3.05a3.6 3.6 0 0 0-5.06 0L3.94 15c-.4.4-.7.92-.82 1.48l-1.1 4.6a.75.75 0 0 0 .9.9l4.6-1.1A3 3 0 0 0 9 20.06l10-10c.68.68.68 1.79 0 2.47l-1.79 1.78a.75.75 0 1 0 1.06 1.06l1.79-1.78a3.25 3.25 0 0 0 0-4.59l.9-.9a3.6 3.6 0 0 0 0-5.05m-4 1.06a2.08 2.08 0 1 1 2.94 2.94L7.94 19a1.6 1.6 0 0 1-.76.43l-3.42.8.82-3.4q.1-.45.42-.77z',
+    undo: 'M4.75 2c.38 0 .7.28.74.65l.01.1v5.69l4.57-4.56a6.4 6.4 0 0 1 8.88-.18l.19.18a6.4 6.4 0 0 1 0 9.06l-8.85 8.84a.75.75 0 0 1-1.06-1.06l8.85-8.84a4.9 4.9 0 0 0-6.77-7.1l-.18.16L6.56 9.5h5.69c.38 0 .7.28.74.65l.01.1c0 .38-.28.7-.65.74l-.1.01h-7.5a.75.75 0 0 1-.74-.65l-.01-.1v-7.5c0-.41.34-.75.75-.75',
+    clear: 'M10 5h4a2 2 0 1 0-4 0M8.5 5a3.5 3.5 0 1 1 7 0h5.75a.75.75 0 0 1 0 1.5h-1.32l-1.17 12.11A3.75 3.75 0 0 1 15.03 22H8.97a3.75 3.75 0 0 1-3.73-3.39L4.07 6.5H2.75a.75.75 0 0 1 0-1.5zm2 4.75a.75.75 0 0 0-1.5 0v7.5a.75.75 0 0 0 1.5 0zM14.25 9c.41 0 .75.34.75.75v7.5a.75.75 0 0 1-1.5 0v-7.5c0-.41.34-.75.75-.75m-7.52 9.47a2.25 2.25 0 0 0 2.24 2.03h6.06c1.15 0 2.12-.88 2.24-2.03L18.42 6.5H5.58z',
+    mic: 'M18.25 11c.38 0 .7.28.74.65l.01.1v.5a6.75 6.75 0 0 1-6.25 6.73v2.27a.75.75 0 0 1-1.5.1v-2.37A6.75 6.75 0 0 1 5 12.48v-.73a.75.75 0 0 1 1.5-.1v.6a5.25 5.25 0 0 0 5.03 5.25h.72a5.25 5.25 0 0 0 5.25-5.03v-.72c0-.41.34-.75.75-.75M12 2a4 4 0 0 1 4 4v6a4 4 0 0 1-8 0V6a4 4 0 0 1 4-4m0 1.5A2.5 2.5 0 0 0 9.5 6v6a2.5 2.5 0 0 0 5 0V6A2.5 2.5 0 0 0 12 3.5',
+    stop: 'M4.75 3C3.78 3 3 3.78 3 4.75v14.5c0 .97.78 1.75 1.75 1.75h14.5c.97 0 1.75-.78 1.75-1.75V4.75C21 3.78 20.22 3 19.25 3z',
+    color: 'M3.84 5.86C6.78 1.94 12.87.8 17.2 3.5c4.28 2.66 5.86 7.77 4.1 12.57-1.65 4.54-6.01 6.33-9.16 4.05-1.17-.85-1.63-1.92-1.85-3.66l-.1-.99-.05-.4c-.12-.93-.31-1.35-.7-1.57-.54-.3-.9-.3-1.6-.03l-.35.14-.18.08c-1.01.44-1.69.6-2.54.42l-.2-.05-.17-.04c-2.78-.87-3.2-4.65-.56-8.16m.98 6.71.13.04.13.03c.44.09.81.02 1.44-.24l.6-.26c1.2-.5 1.98-.54 3.04.05.92.51 1.28 1.3 1.46 2.66l.06.46.05.53.05.43c.17 1.36.48 2.09 1.24 2.64 2.28 1.65 5.54.3 6.87-3.35 1.52-4.15.18-8.51-3.48-10.79s-8.9-1.3-11.37 1.99c-2.08 2.76-1.82 5.28-.22 5.81m11.23-1.99a1.25 1.25 0 1 1 2.41-.65 1.25 1.25 0 0 1-2.41.65m.5 3.49a1.25 1.25 0 1 1 2.4-.65 1.25 1.25 0 0 1-2.4.65m-2.48-6.5a1.25 1.25 0 1 1 2.41-.64 1.25 1.25 0 0 1-2.41.65m-.03 9a1.25 1.25 0 1 1 2.42-.64 1.25 1.25 0 0 1-2.42.65m-3.5-9.96a1.25 1.25 0 1 1 2.42-.65 1.25 1.25 0 0 1-2.42.65'
   };
 
   // Path2D objects are reused rather than reparsed on every repaint.
@@ -1748,6 +1761,65 @@
     spinnerFrame = null;
   }
 
+  /* The record button. A brand disc with a microphone while idle, a red disc
+     with a stop square while recording, and the elapsed time underneath so the
+     customer can see a recording is running. A disabled state is drawn flat and
+     grey for when the microphone or the recorder is unavailable. */
+  function paintRecordButton(host, state, seconds) {
+    const canvasEl = host.querySelector('canvas');
+    if (!canvasEl) return;
+    const size = tokenPx('--btn', 48);
+    const ctx = prepareCanvas(canvasEl, size, size + 16);
+    const centre = size / 2;
+    const radius = centre - 2;
+
+    const recording = state === 'recording';
+    const disabled = state === 'disabled';
+
+    ctx.save();
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.38)';
+    ctx.shadowBlur = 6;
+    ctx.shadowOffsetY = 2;
+    ctx.beginPath();
+    ctx.arc(centre, centre, radius, 0, Math.PI * 2);
+    ctx.fillStyle = disabled ? 'rgba(128, 128, 128, 0.55)'
+      : recording ? CONFIG.edit.recordingDisc
+      : CONFIG.ui.brandColor;
+    ctx.fill();
+    ctx.restore();
+
+    ctx.beginPath();
+    ctx.arc(centre, centre, radius, 0, Math.PI * 2);
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.30)';
+    ctx.stroke();
+
+    drawGlyph(ctx, recording ? 'stop' : 'mic', centre, centre,
+      size * CONFIG.ui.iconScale,
+      disabled ? 'rgba(255, 255, 255, 0.65)' : CONFIG.ui.iconColor);
+
+    // A slash over the microphone says "unavailable" without any text.
+    if (disabled) {
+      ctx.beginPath();
+      ctx.moveTo(centre - radius * 0.5, centre + radius * 0.5);
+      ctx.lineTo(centre + radius * 0.5, centre - radius * 0.5);
+      ctx.lineWidth = 2.5;
+      ctx.strokeStyle = '#ffffff';
+      ctx.stroke();
+    }
+
+    if (recording) {
+      const mins = Math.floor(seconds / 60);
+      const secs = Math.floor(seconds % 60);
+      const label = mins + ':' + String(secs).padStart(2, '0');
+      ctx.fillStyle = CONFIG.edit.recordingDisc;
+      ctx.font = '700 12px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.fillText(label, centre, size + 1);
+    }
+  }
+
   /* A message screen: background gradient, wrapped message and a pill button,
      all painted into one canvas. The real button is then positioned over the
      painted pill using the same numbers, so artwork and hit area cannot drift
@@ -1868,7 +1940,562 @@
   function repaintUi() {
     repaintControls();
     repaintOverlays();
+    if (currentScreen === 'edit') repaintEditControls();
   }
+
+  /* =========================================================================
+     EDIT SCREEN (Phase 3)
+
+     Lives in this same page: showScreen('edit') swaps to it, nothing navigates.
+
+     One canvas holds the frozen view and every stroke, because captureStream
+     records a single canvas and the video has to contain both. Strokes are kept
+     as data rather than pixels, so Undo is a pop and the whole thing is
+     redrawn from the still each time.
+
+     Recording copies that canvas into a smaller one each frame. Two reasons:
+     the recorded size is capped so the encoder and the file stay reasonable,
+     and a canvas that is never drawn to can stop producing frames for
+     captureStream, which a static annotated image would otherwise do.
+
+     The file is finalized when Stop is tapped, not when Share is. That is what
+     lets Share call navigator.share synchronously inside the tap, which iOS
+     Safari requires and which cannot be done after awaiting a recorder stop.
+     ========================================================================= */
+
+  const editScreenEl = document.getElementById('editScreen');
+  const editCanvas = document.getElementById('editCanvas');
+  const editCtx = editCanvas.getContext('2d');
+  const penColorRow = document.getElementById('penColorRow');
+
+  // The frozen frame, captured on entry at the full canvas resolution.
+  let editStill = null;
+
+  /* Strokes are stored in NORMALISED coordinates, 0 to 1 of the canvas, so a
+     rotation or a resize replays them in the right place. */
+  let strokes = [];
+  let activeStroke = null;
+  let penColor = CONFIG.edit.penColors[0];
+
+  // Recording state.
+  let mediaRecorder = null;
+  let recordedChunks = [];
+  let recordedFile = null;
+  let micStream = null;
+  let recordUnavailable = false;   // mic denied, or no supported video type
+  let recordCanvas = null;
+  let recordFrame = null;
+  let recordTimer = null;
+  let recordStartedAt = 0;
+
+  /* ---- Entering and leaving ---------------------------------------------- */
+
+  function openEditScreen() {
+    if (!currentModel) return;
+
+    // Render one frame and freeze it, gradient background included, at the
+    // exact buffer size so nothing is resampled on the way in.
+    renderer.render(scene, camera);
+    editStill = document.createElement('canvas');
+    editStill.width = canvas.width;
+    editStill.height = canvas.height;
+    editStill.getContext('2d').drawImage(canvas, 0, 0);
+
+    strokes = [];
+    activeStroke = null;
+    recordedFile = null;
+    hidePenColorRow();
+
+    controls.enabled = false;        // orbit is off while editing
+    showScreen('edit');
+    layoutEditCanvas();
+    redrawEdit();
+    log('Edit screen opened. Still ' + editStill.width + ' x ' + editStill.height);
+  }
+
+  /* Close discards the recording and the strokes, so re-entering Edit always
+     starts from a fresh capture of the current view. */
+  function closeEditScreen() {
+    if (isRecording()) stopRecording();
+    releaseMic();
+    strokes = [];
+    activeStroke = null;
+    recordedChunks = [];
+    recordedFile = null;
+    editStill = null;
+    hidePenColorRow();
+
+    controls.enabled = true;
+    showScreen('main');
+    log('Edit screen closed; strokes and recording discarded.');
+  }
+
+  /* ---- Canvas layout and drawing ----------------------------------------- */
+
+  // The canvas always covers the viewport, so pointer coordinates map directly.
+  function layoutEditCanvas() {
+    const ratio = Math.min(window.devicePixelRatio || 1, CONFIG.maxPixelRatio);
+    editCanvas.width = Math.round(window.innerWidth * ratio);
+    editCanvas.height = Math.round(window.innerHeight * ratio);
+    editCanvas.style.width = window.innerWidth + 'px';
+    editCanvas.style.height = window.innerHeight + 'px';
+    editCanvas.style.left = '0px';
+    editCanvas.style.top = '0px';
+  }
+
+  /* Redraws from scratch: background, the frozen still fitted inside it, then
+     every stroke replayed. Called on every change, which is what makes Undo and
+     Clear trivial. */
+  function redrawEdit() {
+    if (!editStill) return;
+    const width = editCanvas.width;
+    const height = editCanvas.height;
+
+    // The same gradient as the viewer, so any letterboxing after a rotation
+    // looks deliberate rather than broken.
+    const spec = CONFIG.background[backgroundKey];
+    const gradient = editCtx.createLinearGradient(0, 0, 0, height);
+    gradient.addColorStop(0, spec.top);
+    gradient.addColorStop(1, spec.bottom);
+    editCtx.setTransform(1, 0, 0, 1, 0, 0);
+    editCtx.fillStyle = gradient;
+    editCtx.fillRect(0, 0, width, height);
+
+    // Fit the still, preserving its aspect.
+    const scale = Math.min(width / editStill.width, height / editStill.height);
+    const drawWidth = editStill.width * scale;
+    const drawHeight = editStill.height * scale;
+    editCtx.drawImage(editStill, (width - drawWidth) / 2, (height - drawHeight) / 2,
+      drawWidth, drawHeight);
+
+    // Replay the strokes.
+    const penScale = Math.min(window.devicePixelRatio || 1, CONFIG.maxPixelRatio);
+    editCtx.lineCap = 'round';
+    editCtx.lineJoin = 'round';
+    for (const stroke of strokes.concat(activeStroke ? [activeStroke] : [])) {
+      if (stroke.points.length === 0) continue;
+      editCtx.strokeStyle = stroke.color;
+      editCtx.lineWidth = stroke.width * penScale;
+      editCtx.beginPath();
+
+      const first = stroke.points[0];
+      editCtx.moveTo(first.x * width, first.y * height);
+      if (stroke.points.length === 1) {
+        // A tap with no movement still leaves a dot.
+        editCtx.lineTo(first.x * width + 0.01, first.y * height);
+      } else {
+        // Curve through the midpoints, which smooths a shaky finger.
+        for (let i = 1; i < stroke.points.length - 1; i++) {
+          const a = stroke.points[i];
+          const b = stroke.points[i + 1];
+          editCtx.quadraticCurveTo(a.x * width, a.y * height,
+            (a.x + b.x) / 2 * width, (a.y + b.y) / 2 * height);
+        }
+        const last = stroke.points[stroke.points.length - 1];
+        editCtx.lineTo(last.x * width, last.y * height);
+      }
+      editCtx.stroke();
+    }
+  }
+
+  /* ---- Pointer drawing --------------------------------------------------- */
+
+  function pointFromEvent(event) {
+    const rect = editCanvas.getBoundingClientRect();
+    return {
+      x: (event.clientX - rect.left) / rect.width,
+      y: (event.clientY - rect.top) / rect.height
+    };
+  }
+
+  editCanvas.addEventListener('pointerdown', (event) => {
+    if (currentScreen !== 'edit') return;
+    hidePenColorRow();
+    editCanvas.setPointerCapture(event.pointerId);
+    activeStroke = { color: penColor, width: CONFIG.edit.penWidth, points: [pointFromEvent(event)] };
+    redrawEdit();
+  });
+
+  editCanvas.addEventListener('pointermove', (event) => {
+    if (!activeStroke) return;
+    activeStroke.points.push(pointFromEvent(event));
+    redrawEdit();
+  });
+
+  function endStroke() {
+    if (!activeStroke) return;
+    if (activeStroke.points.length > 0) strokes.push(activeStroke);
+    activeStroke = null;
+    redrawEdit();
+    repaintEditControls();      // Undo and Clear become meaningful
+  }
+  editCanvas.addEventListener('pointerup', endStroke);
+  editCanvas.addEventListener('pointercancel', endStroke);
+
+  /* ---- Pen colour row ---------------------------------------------------- */
+
+  // Built from CONFIG so the colour list is defined in exactly one place.
+  function buildPenColorRow() {
+    for (const color of CONFIG.edit.penColors) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'swatch penColorSwatch';
+      button.setAttribute('aria-label', 'Pen colour ' + color);
+      button.appendChild(document.createElement('canvas'));
+      button.addEventListener('click', () => {
+        penColor = color;
+        hidePenColorRow();
+        repaintEditControls();
+        log('Pen colour: ' + color);
+      });
+      penColorRow.appendChild(button);
+    }
+  }
+
+  function showPenColorRow() {
+    penColorRow.hidden = false;
+    document.getElementById('penColorBtn').setAttribute('aria-expanded', 'true');
+    repaintPenColorRow();
+    positionPenColorRow();
+  }
+
+  function hidePenColorRow() {
+    penColorRow.hidden = true;
+    const button = document.getElementById('penColorBtn');
+    if (button) button.setAttribute('aria-expanded', 'false');
+  }
+
+  /* Placed from the colour button's own rect, so adding another tool to the
+     column cannot put the row in the wrong place. */
+  function positionPenColorRow() {
+    if (penColorRow.hidden) return;
+    const anchor = document.getElementById('penColorBtn').getBoundingClientRect();
+    penColorRow.style.bottom = (window.innerHeight - anchor.top + 10) + 'px';
+    const width = penColorRow.offsetWidth;
+    const maxLeft = Math.max(8, window.innerWidth - width - 8);
+    penColorRow.style.left = Math.min(anchor.left, maxLeft) + 'px';
+  }
+
+  function repaintPenColorRow() {
+    const buttons = penColorRow.querySelectorAll('.penColorSwatch');
+    CONFIG.edit.penColors.forEach((color, index) => {
+      if (buttons[index]) paintSwatch(buttons[index], color, color === penColor);
+    });
+  }
+
+  /* ---- Recorder format selection ----------------------------------------- */
+
+  /* Walks CONFIG.edit.videoTypes and returns the first the browser will record.
+     Returns null when none works, which is what puts the record button into its
+     disabled state and leaves image sharing as the only option. */
+  function pickVideoType() {
+    if (typeof window.MediaRecorder === 'undefined') {
+      log('MediaRecorder is unavailable; video recording is not possible.', 'err');
+      return null;
+    }
+    if (typeof MediaRecorder.isTypeSupported !== 'function') {
+      log('isTypeSupported is unavailable; letting the browser choose.', 'err');
+      return '';
+    }
+    for (const type of CONFIG.edit.videoTypes) {
+      if (MediaRecorder.isTypeSupported(type)) {
+        log('Recorder type chosen: ' + type, 'ok');
+        return type;
+      }
+      log('  not supported: ' + type);
+    }
+    log('No supported video type; image sharing only.', 'err');
+    return null;
+  }
+
+  /* ---- Recording --------------------------------------------------------- */
+
+  function isRecording() {
+    return mediaRecorder !== null && mediaRecorder.state === 'recording';
+  }
+
+  // Even dimensions, long side capped. H.264 encoders commonly require even.
+  function computeRecordSize(width, height) {
+    const cap = CONFIG.edit.recordLongSide;
+    const scale = Math.min(1, cap / Math.max(width, height));
+    const even = (value) => Math.max(2, Math.round(value * scale / 2) * 2);
+    return { width: even(width), height: even(height) };
+  }
+
+  async function startRecording() {
+    if (isRecording() || recordUnavailable) return;
+
+    const type = pickVideoType();
+    if (type === null) {
+      recordUnavailable = true;
+      repaintEditControls();
+      return;
+    }
+
+    // The microphone is asked for here, on the first tap of the record button,
+    // and never before.
+    if (!micStream) {
+      try {
+        log('Requesting the microphone...');
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const track = micStream.getAudioTracks()[0];
+        log('Microphone granted' + (track ? ': ' + (track.label || 'unnamed') : ''), 'ok');
+        if (track && track.getSettings) log('  track settings: ' + JSON.stringify(track.getSettings()));
+      } catch (err) {
+        // Denied is a dead end until the customer changes a system setting, so
+        // the button says so and drawing plus image sharing carry on working.
+        log('Microphone denied or unavailable: ' + err.name + ': ' + err.message, 'err');
+        recordUnavailable = true;
+        repaintEditControls();
+        return;
+      }
+    }
+
+    // A capped copy of the edit canvas is what actually gets recorded.
+    const size = computeRecordSize(editCanvas.width, editCanvas.height);
+    recordCanvas = document.createElement('canvas');
+    recordCanvas.width = size.width;
+    recordCanvas.height = size.height;
+    const recordCtx = recordCanvas.getContext('2d');
+    log('Recording canvas: ' + size.width + ' x ' + size.height +
+      ' (display is ' + editCanvas.width + ' x ' + editCanvas.height +
+      ', capped at ' + CONFIG.edit.recordLongSide + ')');
+
+    let stream;
+    try {
+      stream = recordCanvas.captureStream(CONFIG.edit.recordFps);
+    } catch (err) {
+      log('captureStream failed: ' + err.name + ': ' + err.message, 'err');
+      recordUnavailable = true;
+      repaintEditControls();
+      return;
+    }
+
+    const tracks = stream.getVideoTracks().concat(micStream.getAudioTracks());
+    let combined;
+    try {
+      combined = new MediaStream(tracks);
+    } catch (err) {
+      log('Could not combine tracks: ' + err.message, 'err');
+      return;
+    }
+
+    try {
+      mediaRecorder = type ? new MediaRecorder(combined, { mimeType: type })
+        : new MediaRecorder(combined);
+    } catch (err) {
+      log('MediaRecorder rejected ' + type + ': ' + err.message, 'err');
+      try {
+        mediaRecorder = new MediaRecorder(combined);
+      } catch (err2) {
+        log('MediaRecorder could not be created: ' + err2.message, 'err');
+        recordUnavailable = true;
+        repaintEditControls();
+        return;
+      }
+    }
+
+    // A new recording replaces the previous one.
+    recordedChunks = [];
+    recordedFile = null;
+    log('Recorder mimeType (actual): ' + mediaRecorder.mimeType, 'ok');
+
+    mediaRecorder.ondataavailable = (event) => {
+      if (event.data && event.data.size > 0) recordedChunks.push(event.data);
+    };
+    mediaRecorder.onerror = (event) => {
+      log('Recorder error: ' + (event.error ? event.error.name : 'unknown'), 'err');
+    };
+    mediaRecorder.onstop = finishRecording;
+
+    // Copying the edit canvas every frame keeps the stream producing frames
+    // even when nothing is being drawn, and carries any new strokes into it.
+    const pump = () => {
+      if (!recordCanvas) return;
+      recordCtx.drawImage(editCanvas, 0, 0, recordCanvas.width, recordCanvas.height);
+      recordFrame = requestAnimationFrame(pump);
+    };
+    pump();
+
+    recordStartedAt = performance.now();
+    mediaRecorder.start();
+
+    // The timer redraws the button, and enforces the configured maximum.
+    recordTimer = setInterval(() => {
+      const seconds = (performance.now() - recordStartedAt) / 1000;
+      if (seconds >= CONFIG.edit.maxRecordSeconds) {
+        log('Maximum recording length reached (' + CONFIG.edit.maxRecordSeconds + ' s).');
+        stopRecording();
+        return;
+      }
+      repaintEditControls();
+    }, 250);
+
+    repaintEditControls();
+    log('Recording started.', 'ok');
+  }
+
+  function stopRecording() {
+    if (recordTimer) { clearInterval(recordTimer); recordTimer = null; }
+    if (recordFrame !== null) { cancelAnimationFrame(recordFrame); recordFrame = null; }
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+  }
+
+  /* Builds the file here, on stop, so it is ready before Share is tapped. The
+     type is plain and the extension matches it. */
+  function finishRecording() {
+    const seconds = (performance.now() - recordStartedAt) / 1000;
+    const actualType = (mediaRecorder && mediaRecorder.mimeType) || 'video/webm';
+    const plain = plainMimeType(actualType);
+    const blob = new Blob(recordedChunks, { type: plain });
+    recordCanvas = null;
+
+    if (blob.size === 0) {
+      log('The recording came out empty; nothing reached the recorder.', 'err');
+      recordedFile = null;
+    } else {
+      recordedFile = new File([blob], CONFIG.edit.fileBase + extensionForType(plain),
+        { type: plain });
+      log('Recording finished: ' + recordedFile.name + ', ' + plain + ', ' +
+        formatBytes(recordedFile.size) + ', ' + seconds.toFixed(1) + ' s', 'ok');
+      log('  recorder reported ' + actualType + ', normalised to ' + plain);
+    }
+
+    releaseMic();
+    repaintEditControls();
+  }
+
+  // The microphone must be released or the phone keeps its recording indicator.
+  function releaseMic() {
+    if (!micStream) return;
+    micStream.getTracks().forEach((track) => track.stop());
+    micStream = null;
+    log('Microphone released.');
+  }
+
+  /* ---- Sharing from the edit screen -------------------------------------- */
+
+  /* The video when one exists, otherwise the annotated image at full display
+     resolution. Both go through shareFile, which normalises the type again.
+     Sharing changes nothing here: the screen stays open and the recording is
+     kept, so it can be sent more than once. Only Close discards it. */
+  function onEditShareClicked() {
+    if (recordedFile) {
+      log('Sharing the recording: ' + recordedFile.name + ', ' +
+        formatBytes(recordedFile.size));
+      logShareContext();
+      shareFile(recordedFile);
+      return;
+    }
+
+    let file;
+    try {
+      const dataUrl = editCanvas.toDataURL(CONFIG.edit.imageType, CONFIG.edit.imageQuality);
+      file = dataUrlToFile(dataUrl, CONFIG.edit.fileBase + extensionForType(CONFIG.edit.imageType));
+    } catch (err) {
+      log('Could not capture the annotated image: ' + err.message, 'err');
+      return;
+    }
+    log('Sharing the annotated image: ' + file.name + ', ' + file.type + ', ' +
+      formatBytes(file.size) + ', ' + strokes.length + ' stroke(s)');
+    logShareContext();
+    shareFile(file);
+  }
+
+  // Activation state at the moment of the call, which is what distinguishes a
+  // gesture problem from a file problem if a share is ever refused again.
+  function logShareContext() {
+    if (!DEBUG) return;
+    const activation = navigator.userActivation;
+    if (activation) {
+      log('  userActivation.isActive: ' + activation.isActive +
+        ', hasBeenActive: ' + activation.hasBeenActive);
+    }
+  }
+
+  /* ---- Edit screen controls ---------------------------------------------- */
+
+  function recordButtonState() {
+    if (recordUnavailable) return 'disabled';
+    return isRecording() ? 'recording' : 'idle';
+  }
+
+  function repaintEditControls() {
+    paintIconButton(document.getElementById('editCloseBtn'), 'close', false);
+    paintIconButton(document.getElementById('penBtn'), 'pen', true);
+    paintIconButton(document.getElementById('undoBtn'), 'undo', false);
+    paintIconButton(document.getElementById('clearBtn'), 'clear', false);
+    paintIconButton(document.getElementById('editShareBtn'), 'share', false);
+
+    // The colour button previews the current pen colour as its ring.
+    paintIconButton(document.getElementById('penColorBtn'), 'color', false);
+    paintPenColorIndicator();
+
+    const seconds = isRecording() ? (performance.now() - recordStartedAt) / 1000 : 0;
+    paintRecordButton(document.getElementById('recordBtn'), recordButtonState(), seconds);
+
+    if (!penColorRow.hidden) { repaintPenColorRow(); positionPenColorRow(); }
+  }
+
+  /* A ring in the current pen colour around the colour button, so the active
+     colour is visible without opening the row. */
+  function paintPenColorIndicator() {
+    const host = document.getElementById('penColorBtn');
+    const canvasEl = host.querySelector('canvas');
+    if (!canvasEl) return;
+    const size = tokenPx('--btn', 48);
+    const ctx = canvasEl.getContext('2d');
+    const ring = CONFIG.ui.ringWidth;
+    const centre = size / 2;
+    ctx.beginPath();
+    ctx.arc(centre, centre, centre - ring - 1 + ring * 0.6, 0, Math.PI * 2);
+    ctx.lineWidth = ring;
+    ctx.strokeStyle = penColor;
+    ctx.stroke();
+  }
+
+  /* ---- Wiring ------------------------------------------------------------ */
+
+  document.getElementById('editBtn').addEventListener('click', openEditScreen);
+  document.getElementById('editCloseBtn').addEventListener('click', closeEditScreen);
+  document.getElementById('editShareBtn').addEventListener('click', onEditShareClicked);
+
+  document.getElementById('penBtn').addEventListener('click', () => {
+    hidePenColorRow();          // the pen is the only tool, so this just closes the row
+  });
+
+  document.getElementById('undoBtn').addEventListener('click', () => {
+    if (strokes.length === 0) return;
+    strokes.pop();
+    redrawEdit();
+    repaintEditControls();
+    log('Undo; ' + strokes.length + ' stroke(s) left.');
+  });
+
+  document.getElementById('clearBtn').addEventListener('click', () => {
+    if (strokes.length === 0) return;
+    log('Cleared ' + strokes.length + ' stroke(s).');
+    strokes = [];
+    activeStroke = null;
+    redrawEdit();
+    repaintEditControls();
+  });
+
+  document.getElementById('penColorBtn').addEventListener('click', () => {
+    if (penColorRow.hidden) showPenColorRow(); else hidePenColorRow();
+  });
+
+  document.getElementById('recordBtn').addEventListener('click', () => {
+    if (isRecording()) stopRecording(); else startRecording();
+  });
+
+  buildPenColorRow();
+
+  // A recording must not outlive the page.
+  window.addEventListener('pagehide', () => {
+    if (isRecording()) stopRecording();
+    releaseMic();
+  });
 
   /* =========================================================================
      UI WIRING
@@ -1983,11 +2610,23 @@
     } catch (err) {
       log('gl info unavailable: ' + err.message);
     }
-    checkFluentRegistration();
-    log('fluent bundle: @fluentui/web-components 3.1.3 (web-components-all.min.js)');
-    log('fluent tokens: @fluentui/tokens 1.0.0-alpha.24');
     log('brand colour: ' + CONFIG.ui.brandColor +
       ' (icon glyphs ' + CONFIG.ui.iconColor + ', 5.4:1 contrast)');
+
+    // What the edit screen will be able to do on this device.
+    log('MediaRecorder: ' + (typeof window.MediaRecorder !== 'undefined'));
+    log('canvas.captureStream: ' + (typeof editCanvas.captureStream === 'function'));
+    log('getUserMedia: ' + !!(navigator.mediaDevices &&
+      typeof navigator.mediaDevices.getUserMedia === 'function'));
+    log('navigator.canShare: ' + (typeof navigator.canShare === 'function'));
+    if (typeof window.MediaRecorder !== 'undefined' &&
+        typeof MediaRecorder.isTypeSupported === 'function') {
+      const supported = CONFIG.edit.videoTypes.filter((t) => MediaRecorder.isTypeSupported(t));
+      log('supported video types: ' + (supported.length ? supported.join(' | ') : 'none'));
+    }
+    log('record cap: long side ' + CONFIG.edit.recordLongSide +
+      ' px, ' + CONFIG.edit.recordFps + ' fps, max ' +
+      CONFIG.edit.maxRecordSeconds + ' s');
     log('--- end diagnostics ---');
   }
 
