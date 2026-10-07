@@ -1,0 +1,27 @@
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor and IDE folders
+.vscode/
+.idea/
+*.swp
+*~
+
+# Local-only config and secrets
+.env
+.env.*
+*.local.*
+local/
+
+# Test assets (models live in Google Drive, not in the repo)
+*.glb
+*.gltf
+*.bin
+*.hdr
+*.exr
+*.max
+
+# Tooling
+node_modules/
