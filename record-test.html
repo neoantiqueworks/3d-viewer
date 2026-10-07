@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="color-scheme" content="light dark">
+<meta name="color-scheme" content="only light">
 <title>Record Capability Test</title>
 
 <!--
@@ -150,9 +150,20 @@
   <section>
     <h2>3. Playback and share</h2>
     <video id="playback" controls playsinline hidden></video>
+    <p style="font-size:12.5px;color:#6b7075;margin:10px 0 0;">
+      Every button calls navigator.share directly inside its own tap with no
+      await before the call, so transient activation cannot be what differs
+      between them. Press them in order and compare: if (d) works and every
+      file fails, the browser refuses files as a class; if (c) and (e) work and
+      (a) works while (b) fails, the video's MIME parameters were the cause.
+    </p>
     <div class="row" style="margin-top: 10px;">
-      <button id="shareBtn" type="button" disabled>Share the recording</button>
-      <button id="downloadBtn" type="button" disabled>Download it</button>
+      <button id="shareBtn" class="primary" type="button" disabled>a) Share video, plain type</button>
+      <button id="shareOriginalBtn" type="button" disabled>b) Share video, original type</button>
+      <button id="sharePngBtn" type="button">c) Share PNG snapshot</button>
+      <button id="shareTextBtn" type="button">d) Share text only</button>
+      <button id="shareTxtFileBtn" type="button">e) Share a .txt file</button>
+      <button id="downloadBtn" type="button" disabled>Download the video</button>
     </div>
   </section>
 
@@ -251,11 +262,36 @@
      STEP 1: ENVIRONMENT AND CODEC SCAN
      ======================================================================= */
 
+  /* Identifies the browser. Samsung Internet is a required target alongside
+     Android Chrome and iOS Safari, and it has to be tested for before Chrome
+     because its user agent string contains Chrome as well. */
+  function browserName() {
+    var ua = navigator.userAgent;
+    function match(re) { var m = ua.match(re); return m ? m[1] : null; }
+
+    var v = match(/SamsungBrowser\/([\d.]+)/);
+    if (v) return 'Samsung Internet ' + v;
+    v = match(/Edg(?:A|iOS)?\/([\d.]+)/);
+    if (v) return 'Edge ' + v;
+    v = match(/OPR\/([\d.]+)/);
+    if (v) return 'Opera ' + v;
+    v = match(/FxiOS\/([\d.]+)/) || match(/Firefox\/([\d.]+)/);
+    if (v) return 'Firefox ' + v;
+    v = match(/CriOS\/([\d.]+)/);
+    if (v) return 'Chrome on iOS ' + v;
+    v = match(/Chrome\/([\d.]+)/);
+    if (v) return 'Chrome ' + v;
+    v = match(/Version\/([\d.]+).*Safari/);
+    if (v) return 'Safari ' + v;
+    return 'unrecognised';
+  }
+
   // Records what the scan found so later steps can reuse it.
   var scan = { bestVideo: null, bestAudio: null, hasRecorder: false };
 
   function scanEnvironment() {
     heading('=== ENVIRONMENT ===');
+    log('browser: ' + browserName());
     log('user agent: ' + navigator.userAgent);
     log('platform: ' + (navigator.platform || '(not reported)'));
     log('screen: ' + window.screen.width + ' x ' + window.screen.height +
@@ -434,6 +470,7 @@
     playback.hidden = true;
     playback.removeAttribute('src');
     shareBtn.disabled = true;
+    document.getElementById('shareOriginalBtn').disabled = true;
     downloadBtn.disabled = true;
   }
 
@@ -591,11 +628,12 @@
       }
 
       shareBtn.disabled = !recordedFile;
+      document.getElementById('shareOriginalBtn').disabled = !recordedFile;
       downloadBtn.disabled = !recordedFile;
       cleanupMic();
       recordBtn.disabled = false;
       stopBtn.disabled = true;
-      heading('=== DONE. Press "Share the recording" to test the share sheet. ===');
+      heading('=== DONE. Now press the share buttons a) to e) in order. ===');
     };
 
     // --- Go ---
@@ -642,24 +680,175 @@
      because iOS Safari only permits it inside the gesture. The file already
      exists, which is exactly the arrangement Phase 3 relies on.
      ======================================================================= */
-  shareBtn.addEventListener('click', function () {
-    if (!recordedFile) return;
-    heading('=== SHARE ===');
-    log('sharing ' + recordedFile.name + ' (' + formatBytes(recordedFile.size) + ')');
+  /* =======================================================================
+     STEP 3: SHARE ISOLATION
+
+     Chromium produces "NotAllowedError" from several places and the message
+     text identifies which. From navigator_share.cc:
+
+       "Must be handling a user gesture to perform a share request."
+           -> transient activation missing or already consumed
+       "An earlier share has not yet completed."
+           -> a previous share is still open
+       "Permission denied" thrown synchronously, with a console warning of
+       "Share too large" or "Unsafe file name"
+           -> the renderer side check rejected it
+       "Permission denied" arriving asynchronously
+           -> the BROWSER process returned ShareError::PERMISSION_DENIED
+
+     The error seen on Samsung Internet is the last of those, which is where the
+     browser side file allowlist lives. navigator.canShare only runs the
+     renderer side checks, so canShare returning true and the share then being
+     refused is exactly the shape of a browser side file type rejection. Those
+     allowlists are keyed on plain MIME types, which makes the codec parameters
+     in the recorder's mimeType the leading suspect.
+
+     For the record, the Web Share specification only permits NotAllowedError
+     for a permissions policy denial or missing activation. The file type path
+     is Chromium behaviour beyond the spec.
+     ======================================================================= */
+
+  // Strips parameters: 'video/mp4;codecs="avc1.42E01E"' becomes 'video/mp4'.
+  function plainMimeType(type) {
+    return String(type || '').split(';')[0].trim().toLowerCase();
+  }
+
+  /* Logged immediately before every share call, so an activation problem can be
+     ruled in or out per attempt instead of argued about. */
+  function logActivation() {
+    var ua = navigator.userActivation;
+    if (ua) {
+      log('  userActivation.isActive: ' + ua.isActive +
+        ', hasBeenActive: ' + ua.hasBeenActive,
+        ua.isActive ? 'ok' : 'err');
+    } else {
+      log('  navigator.userActivation is unavailable on this browser', 'warn');
+    }
+    log('  document.hasFocus(): ' + document.hasFocus() +
+      ', visibilityState: ' + document.visibilityState);
+  }
+
+  // Maps an error back to the Chromium code path that produced it.
+  function explainShareError(err) {
+    if (!err) { log('  (no error object)', 'err'); return; }
+    log('  error.name: ' + err.name, 'err');
+    log('  error.message: ' + err.message, 'err');
+
+    var m = err.message || '';
+    if (err.name === 'AbortError') {
+      log('  -> the sheet opened and was dismissed. Sharing itself works.', 'warn');
+    } else if (m.indexOf('user gesture') !== -1) {
+      log('  -> transient activation was missing. Not a file type problem.', 'err');
+    } else if (m.indexOf('earlier share') !== -1) {
+      log('  -> a previous share is still open. Close it and retry.', 'err');
+    } else if (m === 'Permission denied') {
+      log('  -> Chromium "Permission denied". If activation was active above, ' +
+        'this is either the renderer size/name check or, much more likely, the ' +
+        'BROWSER process refusing this file. Compare the other buttons.', 'err');
+    } else if (err.name === 'TypeError') {
+      log('  -> the share data itself was rejected as invalid.', 'err');
+    } else if (err.name === 'DataError') {
+      log('  -> the target failed while receiving the data.', 'err');
+    }
+  }
+
+  /* One share attempt. Everything before navigator.share is synchronous, so the
+     tap's activation is still live when the call happens. */
+  function attemptShare(label, buildPayload) {
+    heading('=== SHARE ATTEMPT: ' + label + ' ===');
+
+    var payload;
+    try {
+      payload = buildPayload();
+    } catch (err) {
+      log('could not build the payload: ' + err.name + ': ' + err.message, 'err');
+      return;
+    }
+    if (!payload) return;
+
+    // Describe exactly what is being handed over.
+    if (payload.files && payload.files.length) {
+      for (var i = 0; i < payload.files.length; i++) {
+        var f = payload.files[i];
+        log('  file.name: ' + f.name);
+        log('  file.type: ' + JSON.stringify(f.type));
+        log('  file.size: ' + formatBytes(f.size) + ' (' + f.size + ' bytes)');
+      }
+    }
+    if (payload.title) log('  title: ' + JSON.stringify(payload.title));
+    if (payload.text) log('  text: ' + JSON.stringify(payload.text));
+
+    if (typeof navigator.canShare === 'function') {
+      var can = false;
+      try { can = navigator.canShare(payload); } catch (e) { can = false; }
+      log('  navigator.canShare(payload): ' + can, can ? 'ok' : 'err');
+    } else {
+      log('  navigator.canShare unavailable', 'warn');
+    }
 
     if (typeof navigator.share !== 'function') {
       log('navigator.share is unavailable on this browser.', 'err');
       return;
     }
-    navigator.share({ files: [recordedFile] }).then(function () {
-      log('share resolved. Note this often resolves even when the user backs ' +
-        'out, so it does not prove the file was actually sent.', 'ok');
+
+    logActivation();
+    var startedAtMs = performance.now();
+    log('  calling navigator.share now...');
+
+    navigator.share(payload).then(function () {
+      log('  SHARE RESOLVED after ' + (performance.now() - startedAtMs).toFixed(0) +
+        ' ms. Note this can resolve even when the user backs out.', 'ok');
     }).catch(function (err) {
-      if (err && err.name === 'AbortError') {
-        log('share aborted (user dismissed the sheet).', 'warn');
-      } else {
-        log('share failed: ' + (err ? err.name + ': ' + err.message : 'unknown'), 'err');
-      }
+      log('  SHARE REJECTED after ' + (performance.now() - startedAtMs).toFixed(0) +
+        ' ms', 'err');
+      explainShareError(err);
+    });
+  }
+
+  // (a) The hypothesis: a plain video/mp4 type and a .mp4 name.
+  document.getElementById('shareBtn').addEventListener('click', function () {
+    attemptShare('a) video, plain type', function () {
+      if (!recordedFile) { log('record something first.', 'err'); return null; }
+      var plain = plainMimeType(recordedFile.type);
+      log('  original type ' + JSON.stringify(recordedFile.type) +
+        ' rewritten to ' + JSON.stringify(plain));
+      return { files: [new File([recordedFile], 'share-test.mp4', { type: plain })] };
+    });
+  });
+
+  // (b) Current behaviour: whatever MediaRecorder reported, parameters included.
+  document.getElementById('shareOriginalBtn').addEventListener('click', function () {
+    attemptShare('b) video, original type', function () {
+      if (!recordedFile) { log('record something first.', 'err'); return null; }
+      return { files: [recordedFile] };
+    });
+  });
+
+  // (c) An image, to see whether files work at all with a simple type.
+  document.getElementById('sharePngBtn').addEventListener('click', function () {
+    attemptShare('c) PNG snapshot', function () {
+      var dataUrl = stage.toDataURL('image/png');
+      var comma = dataUrl.indexOf(',');
+      var binary = atob(dataUrl.slice(comma + 1));
+      var bytes = new Uint8Array(binary.length);
+      for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return { files: [new File([bytes], 'share-test.png', { type: 'image/png' })] };
+    });
+  });
+
+  // (d) No file at all, which isolates whether Web Share works in principle.
+  document.getElementById('shareTextBtn').addEventListener('click', function () {
+    attemptShare('d) text only', function () {
+      return { title: 'Record test', text: 'Share test with no file attached.' };
+    });
+  });
+
+  /* (e) The simplest possible file. If this is refused too then the browser is
+     objecting to files as a class rather than to the video in particular. */
+  document.getElementById('shareTxtFileBtn').addEventListener('click', function () {
+    attemptShare('e) text/plain file', function () {
+      var blob = new Blob(['share test'], { type: 'text/plain' });
+      return { files: [new File([blob], 'share-test.txt', { type: 'text/plain' })] };
     });
   });
 

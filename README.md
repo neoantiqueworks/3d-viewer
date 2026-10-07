@@ -6,11 +6,22 @@ with three.js as static files only, hosted on GitHub Pages.
 
 | File | Purpose |
 | --- | --- |
-| `viewer.html` | The customer-facing viewer. This is the page you send out. |
+| `viewer.html` | The customer-facing viewer, built on Fluent UI Web Components. This is the page you send out, and where all future work goes. |
+| `viewer-classic.html` | The earlier hand-rolled UI, kept for comparison and as a fallback. Same behaviour. |
 | `link-builder.html` | Internal tool: paste a Drive link, get the viewer link. |
 | `drive-test.html` | Diagnostic page from Phase 1, kept for troubleshooting. |
-| `record-test.html` | Diagnostic page: what MediaRecorder can actually produce on a given phone. Groundwork for Phase 3. |
-| `viewer-fluent.html` | Design experiment: the same viewer with its UI rebuilt on Fluent UI Web Components. |
+| `record-test.html` | Diagnostic page: what MediaRecorder and the share sheet actually do on a given phone. Groundwork for Phase 3. |
+
+Both viewers are generated from one set of shared blocks, and a parity harness
+asserts that fourteen behavioural regions are byte-identical between them, so
+only the UI layer differs.
+
+## Target browsers
+
+iOS Safari, Android Chrome and **Samsung Internet**. Samsung Internet is not
+optional: it is the default browser on Galaxy phones, it is the browser the
+project is tested on, and its dark mode behaves differently from Chrome's in a
+way that shapes the whole UI (see below).
 
 ## Phase 2: The viewer (`viewer.html`)
 
@@ -149,17 +160,61 @@ scheme, and the GPU vendor/renderer strings.
 `VIEWER_VERSION` near the top is printed in that block. Bump it when shipping,
 so a stale cached page on a phone can be told apart from a current one.
 
-### Android Chrome auto dark theme
+### Forced dark mode, and why every control is painted on canvas
 
-Android Chrome applies its own **Auto Dark Theme** to any page that does not
-declare that it handles dark mode itself. The algorithm inverts lightness while
-preserving hue, which turns the light beige background into a dark brown and
-darkens the round button swatches. The WebGL canvas is generally exempt, so the
-result is a page where the CSS-painted parts and the canvas disagree.
+Measured on a Galaxy S25 Ultra running **Samsung Internet 30** (Chromium 143),
+with the on-screen diagnostics: the WebGL background rendered the beige gradient
+**correctly**, while the CSS-coloured controls did not. The light-background
+button came out dark brown instead of `#eae2d5`, and the chrome material button
+came out dark grey instead of light silver.
 
-The fix is to declare support for both schemes, which this page does twice, in
-the `<meta name="color-scheme">` tag and in `color-scheme` on `:root`. Do not
-remove either.
+So the browser was rewriting **CSS colours** while leaving **canvas pixels**
+alone. Samsung Internet's dark mode does this regardless of the
+`color-scheme` declaration, which it ignores.
+
+Three things were ruled out with evidence rather than assumption, before the
+device data arrived:
+
+- **Tone mapping on the background.** three.js sets the background material's
+  `toneMapped` flag from the texture colour space
+  (`WebGLBackground.js`: `toneMapped = getTransfer(colorSpace) !== SRGBTransfer`),
+  and that expression was executed against r186 to confirm it yields `false` for
+  an sRGB texture. The arithmetic rules it out independently: ACES on linear
+  0.823 returns about 0.80, which encodes back to 232, essentially unchanged.
+- **Shader precision.** The background fragment shader is a bare `texture2D`
+  fetch with no arithmetic; precision cannot darken a colour that far.
+- **A stale cached page.** The previous build's light colour was `#e8e8ea`, a
+  light grey, so a stale page would have looked grey rather than brown.
+  `VIEWER_VERSION` is printed in the diagnostics to settle this at a glance.
+
+**The fix.** Canvas is the only surface proven immune on that device, so every
+coloured control is now painted into its own canvas and nothing takes its colour
+from CSS:
+
+| Control | How it is drawn |
+| --- | --- |
+| Three material swatches | Canvas: the material colour, plus a ring in the brand colour when active. |
+| Light and dark background buttons | Canvas: a brand-coloured disc with a Fluent sun or moon glyph, plus a light ring when active. |
+| Close, share, edit, retry | Canvas: a brand-coloured disc with the Fluent glyph filled via `Path2D`. |
+| Loading spinner and percentage | Canvas, animated with `requestAnimationFrame`. |
+| Error card and end screen | Canvas: the background gradient, the wrapped message and the pill button, all painted. |
+
+`color-scheme: only light` is declared in both the meta tag and on `:root` as a
+guard for the browsers that do honour it, but it is not relied on.
+
+Two consequences worth knowing:
+
+- The message screens paint their text, so the real text stays in the DOM as a
+  screen-reader-only element, which is also the string the painter reads. The
+  pill button is a transparent real control positioned from the same geometry as
+  the painted pill, so the artwork and the hit area cannot drift apart.
+- Painted controls must be redrawn when state or viewport changes, because the
+  button sizes are `clamp()`ed against viewport width. `repaintUi()` is called
+  from `applyBackground`, `applyMaterial` and the resize handler.
+
+The one colour still expressed in CSS is the keyboard focus ring, which is
+cosmetic, and both a light outline and a dark shadow are drawn so one of them
+always contrasts.
 
 ### Responsive button scaling
 
@@ -204,20 +259,16 @@ This page makes no network requests and contains no API key: it only parses a
 string and builds a URL. `VIEWER_URL` at the top of its script is the only
 thing to change if the GitHub Pages address ever changes.
 
-## Design experiment: Fluent UI variant (`viewer-fluent.html`)
+## The Fluent UI layer
 
-The same viewer with its UI layer rebuilt on
-[Fluent UI Web Components](https://github.com/microsoft/fluentui) v3, for
-comparison against the hand-rolled UI. It is generated from `viewer.html`
-rather than hand-copied, so the CONFIG block, DEBUG and `debug=1`, the URL
-parameters, the gradient backgrounds, the per-material default background, the
-patina shader, the Drive fetch, share and close are byte-identical between the
-two files. Only the UI layer differs.
+`viewer.html` is built on [Fluent UI Web Components](https://github.com/microsoft/fluentui)
+v3. `viewer-classic.html` keeps the earlier hand-rolled UI with identical
+behaviour, for comparison and as a fallback.
 
 ### Loading without a bundler
 
-The package README documents a single pre-bundled module script from CDN. This
-page pins exact versions:
+The package README documents a single pre-bundled module script from CDN. Exact
+versions are pinned:
 
 | Module | Purpose |
 | --- | --- |
@@ -225,27 +276,46 @@ page pins exact versions:
 | `@fluentui/tokens@1.0.0-alpha.24/+esm` | Supplies `webLightTheme` and `webDarkTheme`. |
 
 Both were checked to be self-contained, with no bare import specifiers, so a
-browser can load them directly with no import map and no build step.
+browser loads them directly with no import map. Note that `setTheme` lives in the
+main package but the themes do **not**, and that the tokens package is still
+published only under an alpha tag.
 
-Theming is required by the library, not optional: the components are styled
-entirely through CSS variables that `setTheme` writes. The page calls it from
-`applyFluentTheme()`, which `applyBackground()` invokes, so the Fluent theme
-follows the active background.
+Theming is required rather than optional: the components are styled entirely
+through CSS variables that `setTheme` writes. `applyFluentTheme()` is called from
+`applyBackground()`, so the theme follows the active background, and it is
+wrapped in `try`/`catch` because a CDN failure must not take the 3D view down.
 
-### Components used
+### Brand colour
 
-- `fluent-button` for every icon button: close, share, edit, light, dark, retry
-  and "Open again".
-- `fluent-spinner` for loading.
-- `fluent-text` for the error and end screen messages.
-- Fluent System Icons (from `@fluentui/svg-icons`, MIT) for dismiss, share,
-  edit, weather-sunny and weather-moon. The path data is inlined, so the page
-  costs no extra requests and does not depend on the icon CDN.
+`CONFIG.ui.brandColor`, default `#5b5fc7`, is the single source. It tints every
+icon button and the active ring on the material swatches, and after each
+`setTheme` call `applyBrandTokens()` overwrites the Fluent brand tokens with it,
+so the light and dark themes share one brand. The hover and pressed shades are
+derived from it, so changing the one value moves everything.
 
-The three material swatches stay custom, because the control *is* a color
-circle, but they take their size from the same `--swatch` token as the Fluent
-buttons and draw their selected and focus states from Fluent tokens
-(`--colorCompoundBrandStroke`, `--colorStrokeFocus2`) so they match.
+Those tokens are written to `document.body`, which is the element `setTheme`
+targets by default; a value set higher up would lose to it.
+
+White glyphs on `#5b5fc7` measure **5.38:1**, comfortably past the 3:1 a glyph
+needs, and the ratio does not change between themes because the disc colour is
+fixed. The selected background button uses a light ring instead of a brand ring,
+since a brand ring on a brand disc would be invisible.
+
+### What Fluent actually provides here
+
+This is worth being precise about, because the forced-dark work changed it.
+Fluent's own surfaces live in shadow DOM styled by CSS tokens, which is exactly
+what Samsung Internet rewrites, and shadow DOM cannot be painted into from the
+page. So the buttons use `appearance="transparent"` and the visible disc is the
+canvas slotted inside them.
+
+What Fluent contributes is therefore the interaction model rather than the
+fill: component semantics, keyboard and focus behaviour, and the pressed
+animation. `fluent-spinner` and `fluent-text` were dropped for the same reason
+and replaced by canvas painting.
+
+If you would rather have Fluent's own spinner and text visuals and accept that a
+forced dark mode will recolour them, that is a one-line change back.
 
 ### Download cost
 
@@ -258,37 +328,23 @@ Measured, not estimated:
 | **Fluent total** | **387,069 B** | **85,965 B** |
 | three.js (`three.module.js` + `three.core.js`), for scale | 2,120,885 B | 419,512 B |
 
-So Fluent adds about **86 KB gzipped**, roughly a 20 percent increase over what
-the page already downloads for three.js, from a second CDN origin.
+About **86 KB gzipped**, roughly a 20 percent increase over what the page already
+downloads, from a second CDN origin. `viewer-classic.html` has no such
+dependency, which is part of why it is kept.
 
-### Known risks on phones
+### Remaining risks on phones
 
-Everything below is reasoned from the package contents, not observed on a
-device, because this environment has no browser:
+- **Shadow DOM blocks the page's touch CSS.** `touch-action: manipulation` and
+  `-webkit-tap-highlight-color` do not reach Fluent's internal control, so
+  double-tap zoom and tap highlight on the buttons may differ from
+  `viewer-classic.html`.
+- **The UI depends on a second CDN.** If jsDelivr fails for the Fluent modules
+  the 3D view and every handler still work, but the controls stay invisible.
+- **Button sizing** relies on `::part(control)` being exposed to stretch the
+  internal control to the host size.
 
-- **Button sizing.** This page needs `clamp()` sized buttons so the bars cannot
-  overlap at 320 px. Fluent sizes its own buttons internally, so the host is
-  sized here and `::part(control)` is stretched to fill it. If that part name
-  is not exposed, the buttons keep the right footprint but their internal
-  control may not fill it, leaving the tap target visually smaller.
-- **Flash of unstyled controls.** Until the module registers the elements they
-  are unknown, meaning `display: inline` and unstyled. They are hidden until
-  `:defined` matches, so on a slow phone connection the buttons appear a moment
-  after the model rather than appearing wrong.
-- **A second CDN is now a hard dependency for the UI.** If jsDelivr fails for
-  the Fluent modules, the 3D view and every handler still work, but the
-  controls stay invisible. `viewer.html` has no such dependency.
-- **The theme package is alpha.** `@fluentui/tokens` is only published under a
-  `1.0.0-alpha` tag, and it is the documented source of the themes.
-- **Shadow DOM and the canvas.** The buttons live in shadow roots, so the
-  `touch-action: manipulation` and `-webkit-tap-highlight-color` rules that
-  `viewer.html` applies to its own buttons do not reach Fluent's internal
-  control. Double-tap zoom and tap highlight behaviour on the controls may
-  differ from the custom build on both iOS Safari and Android Chrome.
-
-Both pages log which build they are in the `debug=1` diagnostics, and the
-Fluent one additionally reports whether `fluent-button`, `fluent-spinner` and
-`fluent-text` actually registered.
+The `debug=1` diagnostics report which build is running, the brand colour, and
+whether `fluent-button` actually registered.
 
 ## Phase 3 groundwork: record capability test (`record-test.html`)
 
@@ -318,6 +374,60 @@ captured rather than one frozen one.
 
 Run it over **https**, not the local LAN address: `getUserMedia` and
 `navigator.share` both require a secure context.
+
+### Share isolation, and the plain MIME rule
+
+Measured on Samsung Internet 30 (Chromium 143): recording works and produces
+`video/mp4` with H.264 and AAC, 5 seconds is about 208 KB, playback reports
+320x320, and `navigator.canShare({files:[video]})` returns `true`. Then
+`navigator.share` is refused about 13 ms after the tap with
+`NotAllowedError: Permission denied`.
+
+The Web Share specification permits `NotAllowedError` for only two reasons: a
+permissions policy denial, or missing transient activation. A rejected file type
+should surface as `TypeError`. So the spec alone does not explain this.
+
+Chromium does. From
+`third_party/blink/renderer/modules/webshare/navigator_share.cc`, the message
+text identifies which code path produced the error:
+
+| Message | Cause |
+| --- | --- |
+| `Must be handling a user gesture to perform a share request.` | Activation missing or already consumed |
+| `An earlier share has not yet completed.` | A previous share is still open |
+| `Permission denied`, thrown synchronously with a console warning | Renderer-side size or filename check |
+| `Permission denied`, arriving asynchronously | The **browser process** returned `ShareError::PERMISSION_DENIED` |
+
+The observed error is the last one, and the ~13 ms delay fits a mojo round trip.
+That is where the browser-side file allowlist lives, and crucially
+`navigator.canShare` only runs the **renderer-side** checks. So `canShare`
+passing and `share` then failing is exactly the shape of a browser-side file
+type rejection, and such allowlists are keyed on **plain** MIME types.
+
+`record-test.html` therefore offers five share buttons, each calling
+`navigator.share` directly inside its own tap with no `await` beforehand, so
+activation cannot be what differs between them:
+
+| Button | Isolates |
+| --- | --- |
+| a) video, plain `video/mp4` | The hypothesis |
+| b) video, original type with codec parameters | Current behaviour |
+| c) PNG snapshot | Whether simple file types work |
+| d) text only, no file | Whether Web Share works at all |
+| e) a `text/plain` file | Whether files are refused as a class |
+
+Each logs the exact File name, type and size, the `canShare` result,
+`navigator.userActivation.isActive` immediately before the call, and the full
+error name and message mapped back to the Chromium path above.
+
+Reading the result: if (d) works and every file fails, the browser refuses files
+as a class. If (c) and (e) work and (a) works while (b) fails, the MIME
+parameters were the cause.
+
+**The plain MIME rule is already applied in both viewers.** `plainMimeType()`
+strips parameters, and `shareFile()` normalises the type at the share boundary,
+which is the single door every shared file goes through, including Phase 3's
+recorded video.
 
 ## Phase 1: Drive fetch test (`drive-test.html`)
 

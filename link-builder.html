@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="only light">
 <title>Viewer Link Builder</title>
 
 <!--
@@ -189,6 +190,11 @@
 
   // Where viewer.html is published. Change this if the repository or the
   // GitHub Pages address ever changes.
+  //
+  // viewer.html is the Fluent build and is what customers get. The earlier
+  // hand-rolled UI lives at viewer-classic.html with identical behaviour and
+  // accepts exactly the same parameters, so swapping the file name in a link is
+  // enough to compare the two.
   var VIEWER_URL = 'https://neoantiqueworks.github.io/3d-viewer/viewer.html';
 
   // These must match the defaults inside viewer.html. A parameter is left out
