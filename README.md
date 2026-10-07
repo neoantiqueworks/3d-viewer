@@ -4,6 +4,109 @@ A web-based 3D model viewer for phone browsers (iOS and Android). Models are
 GLB files stored in Google Drive and fetched with the Drive API v3. Built
 with three.js as static files only, hosted on GitHub Pages.
 
+| File | Purpose |
+| --- | --- |
+| `viewer.html` | The customer-facing viewer. This is the page you send out. |
+| `link-builder.html` | Internal tool: paste a Drive link, get the viewer link. |
+| `drive-test.html` | Diagnostic page from Phase 1, kept for troubleshooting. |
+
+## Phase 2: The viewer (`viewer.html`)
+
+The customer taps a link and sees the model. There is nothing to fill in and
+nothing to set up:
+
+```
+https://neoantiqueworks.github.io/3d-viewer/viewer.html?model=DRIVE_FILE_ID
+```
+
+### URL parameters
+
+| Parameter | Values | Default | Meaning |
+| --- | --- | --- | --- |
+| `model` | Drive file ID | (required) | Which GLB to load. A full Drive share link is also accepted. |
+| `mat` | `chrome`, `bronze`, `anthracite` | `chrome` | Material shown on arrival. |
+| `bg` | `light`, `dark` | `light` | Background shown on arrival. |
+
+Invalid values fall back to the default silently, because the customer cannot
+do anything about a bad link. Use `link-builder.html` to build these links
+instead of writing them by hand.
+
+### The screen
+
+Icon-only round buttons, no text, no navigation:
+
+| Position | Button |
+| --- | --- |
+| Top left | Light background, dark background |
+| Top right | Close |
+| Bottom left | Chrome, aged bronze, anthracite |
+| Bottom center | Edit (Phase 3, hidden for now) |
+| Bottom right | Share |
+
+One finger orbits, two fingers pinch to zoom and pan.
+
+**Share** captures the current view as a JPEG, model and background only with
+no buttons in the image, and opens the system share sheet through the Web
+Share API, so it can go to WhatsApp or mail. If the browser cannot share
+files, the image is downloaded instead.
+
+**Close** tries `window.close()`. Browsers only allow that for windows a
+script opened, so when it is refused the page turns into a plain end screen
+with one "Open again" button.
+
+### Materials
+
+All three presets are applied to the whole model, replacing whatever the GLB
+contained. The models are exported from 3ds Max as geometry only and may have
+no UV coordinates at all, so **no material uses a texture map**:
+
+- **Chrome** and **anthracite** are plain `MeshStandardMaterial` with color,
+  metalness and roughness only. With no textures there is nothing to map.
+- **Aged bronze** gets its variation from a shader injected into
+  `MeshStandardMaterial` via `onBeforeCompile`. It evaluates a 3D value-noise
+  field at the **world position** of each pixel, which is a solid texture: no
+  projection, no seams and no UVs. Upward-facing surfaces rub brighter, and a
+  fresnel term brightens silhouette edges, the way real bronze wears.
+  three.js still does all the lighting and the reflections.
+
+Reflections come from `RoomEnvironment`, which three.js builds procedurally
+and bakes into a small cubemap once at startup. No HDRI file is downloaded, so
+phones get metal reflections with no extra network traffic.
+
+Every tunable value lives in the single `CONFIG` block at the top of the
+module script in `viewer.html`: the API key, both background colors, all
+material values, the share image format and the camera framing.
+
+### Debug output
+
+`const DEBUG = false;` at the top of the module script. With `false` the page
+is silent and shows no technical detail at any time. With `true` an on-screen
+log panel is added, which matters because a phone has no reachable browser
+console; tap the panel to dismiss it. Everything also goes to the console.
+
+### The API key
+
+The key is a constant in `CONFIG` in `viewer.html`. Key secrecy is not a goal
+for this project; restrict the key to the Google Drive API in Google Cloud
+Console instead.
+
+Because the key is committed, GitHub secret scanning will reject the first
+push that contains it. The rejection message prints an unblock URL like
+`https://github.com/neoantiqueworks/3d-viewer/security/secret-scanning/unblock-secret/<id>`.
+Open it while signed in as the repository owner, choose to allow the secret,
+then push again.
+
+## Phase 2: Link builder (`link-builder.html`)
+
+Internal tool. Paste a Drive share link or a bare file ID, pick the starting
+material and background, and copy the finished viewer link. A parameter is
+only added to the link when the choice differs from the viewer's own default,
+so the common case stays short.
+
+This page makes no network requests and contains no API key: it only parses a
+string and builds a URL. `VIEWER_URL` at the top of its script is the only
+thing to change if the GitHub Pages address ever changes.
+
 ## Phase 1: Drive fetch test (`drive-test.html`)
 
 A test page that shows a GLB from Google Drive can be downloaded in

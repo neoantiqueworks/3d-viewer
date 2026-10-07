@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Viewer Link Builder</title>
+
+<!--
+  ===========================================================================
+  Internal tool, not a customer page.
+
+  Paste a Google Drive share link (or a bare file ID), pick the starting
+  material and background, and copy the finished viewer link.
+
+  Everything happens in the browser: this page makes no network requests and
+  needs no API key, because it only parses a string and builds a URL.
+  ===========================================================================
+-->
+<style>
+  :root { --accent: #2b6cb0; }
+
+  html, body {
+    margin: 0;
+    background: #f4f5f7;
+    color: #23262a;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 15px;
+    line-height: 1.5;
+  }
+
+  main {
+    max-width: 640px;
+    margin: 0 auto;
+    padding: 20px 16px 48px;
+    box-sizing: border-box;
+  }
+
+  h1 { font-size: 20px; margin: 4px 0 18px; }
+
+  /* Each step is a white card so the order is obvious. */
+  section {
+    background: #fff;
+    border: 1px solid #e2e4e8;
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin-bottom: 14px;
+  }
+  section h2 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #6b7075;
+    margin: 0 0 10px;
+  }
+
+  textarea, input[type="text"] {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 10px;
+    font-size: 16px;            /* 16px stops iOS Safari zooming on focus */
+    font-family: inherit;
+    border: 1px solid #c6cad0;
+    border-radius: 7px;
+    background: #fff;
+    color: inherit;
+  }
+  textarea { resize: vertical; min-height: 68px; }
+
+  /* Option rows: one group for the material, one for the background. */
+  .options { display: flex; flex-wrap: wrap; gap: 8px; }
+  .options button {
+    font: inherit;
+    padding: 8px 14px;
+    border-radius: 999px;
+    border: 1px solid #c6cad0;
+    background: #fff;
+    color: #23262a;
+    cursor: pointer;
+  }
+  .options button[aria-pressed="true"] {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: #fff;
+    font-weight: 600;
+  }
+  .hint { font-size: 12.5px; color: #6b7075; margin: 8px 0 0; }
+
+  /* Result card */
+  #result code {
+    display: block;
+    font-family: Menlo, Consolas, monospace;
+    font-size: 13px;
+    word-break: break-all;
+    background: #f7f8fa;
+    border: 1px solid #e2e4e8;
+    border-radius: 7px;
+    padding: 10px;
+    min-height: 1.5em;
+  }
+  .actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .actions button {
+    font: inherit;
+    font-size: 15px;
+    padding: 10px 18px;
+    border-radius: 7px;
+    border: 1px solid #c6cad0;
+    background: #fff;
+    cursor: pointer;
+  }
+  .actions button.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    font-weight: 600;
+  }
+  .actions button:disabled { opacity: 0.45; cursor: default; }
+
+  #status { font-size: 13px; margin-top: 10px; min-height: 1.3em; }
+  #status.ok  { color: #1f7a3d; }
+  #status.err { color: #b3261e; }
+</style>
+</head>
+
+<body>
+<main>
+
+  <h1>Viewer Link Builder</h1>
+
+  <!-- Step 1: the Drive file -->
+  <section>
+    <h2>1. Drive share link or file ID</h2>
+    <textarea id="source" autocomplete="off" spellcheck="false" autocapitalize="off"
+      placeholder="https://drive.google.com/file/d/FILE_ID/view?usp=sharing"></textarea>
+    <p class="hint">
+      The file must be shared as "Anyone with the link" in Google Drive,
+      otherwise the viewer cannot download it.
+    </p>
+  </section>
+
+  <!-- Step 2: starting material. A parameter is only added when it is not
+       the viewer's own default. -->
+  <section>
+    <h2>2. Starting material</h2>
+    <div class="options" id="materialOptions">
+      <button type="button" data-value="chrome"     aria-pressed="true">Chrome (default)</button>
+      <button type="button" data-value="bronze"     aria-pressed="false">Aged bronze</button>
+      <button type="button" data-value="anthracite" aria-pressed="false">Anthracite</button>
+    </div>
+  </section>
+
+  <!-- Step 3: starting background -->
+  <section>
+    <h2>3. Starting background</h2>
+    <div class="options" id="backgroundOptions">
+      <button type="button" data-value="light" aria-pressed="true">Light (default)</button>
+      <button type="button" data-value="dark"  aria-pressed="false">Dark</button>
+    </div>
+  </section>
+
+  <!-- Step 4: the finished link -->
+  <section id="result">
+    <h2>4. Viewer link</h2>
+    <code id="link">Paste a Drive link above.</code>
+    <div class="actions">
+      <button id="copyBtn" class="primary" type="button" disabled>Copy</button>
+      <button id="openBtn" type="button" disabled>Open to test</button>
+    </div>
+    <div id="status"></div>
+  </section>
+
+</main>
+
+<script>
+(function () {
+  'use strict';
+
+  /* =======================================================================
+     CONFIG
+     ======================================================================= */
+
+  // Where viewer.html is published. Change this if the repository or the
+  // GitHub Pages address ever changes.
+  var VIEWER_URL = 'https://neoantiqueworks.github.io/3d-viewer/viewer.html';
+
+  // These must match the defaults inside viewer.html. A parameter is left out
+  // of the link whenever the choice equals the default, which keeps the
+  // common link short.
+  var DEFAULT_MATERIAL = 'chrome';
+  var DEFAULT_BACKGROUND = 'light';
+
+  /* =======================================================================
+     STATE AND ELEMENTS
+     ======================================================================= */
+  var sourceEl = document.getElementById('source');
+  var linkEl = document.getElementById('link');
+  var copyBtn = document.getElementById('copyBtn');
+  var openBtn = document.getElementById('openBtn');
+  var statusEl = document.getElementById('status');
+
+  var selected = {
+    mat: DEFAULT_MATERIAL,
+    bg: DEFAULT_BACKGROUND
+  };
+
+  var currentLink = '';
+
+  /* =======================================================================
+     FILE ID EXTRACTION
+     Accepts the two common Drive link shapes and a bare ID. Same rules the
+     viewer uses, so anything this page accepts the viewer also accepts.
+       https://drive.google.com/file/d/FILE_ID/view?usp=sharing
+       https://drive.google.com/open?id=FILE_ID
+     ======================================================================= */
+  function extractFileId(input) {
+    var s = String(input || '').trim();
+    if (!s) return '';
+
+    var m = s.match(/\/d\/([A-Za-z0-9_-]+)/);
+    if (m) return m[1];
+
+    m = s.match(/[?&]id=([A-Za-z0-9_-]+)/);
+    if (m) return m[1];
+
+    // A bare ID: Drive IDs are long and use only these characters.
+    if (/^[A-Za-z0-9_-]{20,}$/.test(s)) return s;
+
+    return '';
+  }
+
+  /* =======================================================================
+     LINK BUILDING
+     ======================================================================= */
+  function setStatus(text, level) {
+    statusEl.textContent = text || '';
+    statusEl.className = level || '';
+  }
+
+  function rebuild() {
+    var raw = sourceEl.value.trim();
+    var id = extractFileId(raw);
+
+    if (!id) {
+      currentLink = '';
+      linkEl.textContent = raw
+        ? 'That does not look like a Drive link or file ID.'
+        : 'Paste a Drive link above.';
+      copyBtn.disabled = true;
+      openBtn.disabled = true;
+      setStatus('');
+      return;
+    }
+
+    var params = ['model=' + encodeURIComponent(id)];
+    if (selected.mat !== DEFAULT_MATERIAL) params.push('mat=' + selected.mat);
+    if (selected.bg !== DEFAULT_BACKGROUND) params.push('bg=' + selected.bg);
+
+    currentLink = VIEWER_URL + '?' + params.join('&');
+    linkEl.textContent = currentLink;
+    copyBtn.disabled = false;
+    openBtn.disabled = false;
+    setStatus('');
+  }
+
+  /* =======================================================================
+     OPTION BUTTONS
+     ======================================================================= */
+  function wireOptions(containerId, key) {
+    var container = document.getElementById(containerId);
+    var buttons = container.querySelectorAll('button');
+
+    container.addEventListener('click', function (event) {
+      var button = event.target.closest('button');
+      if (!button) return;
+
+      selected[key] = button.getAttribute('data-value');
+      for (var i = 0; i < buttons.length; i++) {
+        buttons[i].setAttribute('aria-pressed', String(buttons[i] === button));
+      }
+      rebuild();
+    });
+  }
+
+  wireOptions('materialOptions', 'mat');
+  wireOptions('backgroundOptions', 'bg');
+
+  sourceEl.addEventListener('input', rebuild);
+
+  /* =======================================================================
+     COPY AND OPEN
+     navigator.clipboard needs a secure context, so a selection based
+     fallback is kept for plain http and for older browsers.
+     ======================================================================= */
+  function fallbackCopy(text) {
+    var temp = document.createElement('textarea');
+    temp.value = text;
+    temp.setAttribute('readonly', '');
+    temp.style.position = 'fixed';
+    temp.style.opacity = '0';
+    document.body.appendChild(temp);
+    temp.select();
+    var ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+    temp.remove();
+    return ok;
+  }
+
+  // Runs the fallback once and reports the single result.
+  function reportFallbackCopy() {
+    if (fallbackCopy(currentLink)) {
+      setStatus('Link copied.', 'ok');
+    } else {
+      setStatus('Could not copy. Select the link above and copy it by hand.', 'err');
+    }
+  }
+
+  copyBtn.addEventListener('click', function () {
+    if (!currentLink) return;
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(currentLink)
+        .then(function () { setStatus('Link copied.', 'ok'); })
+        .catch(reportFallbackCopy);
+      return;
+    }
+
+    reportFallbackCopy();
+  });
+
+  openBtn.addEventListener('click', function () {
+    if (currentLink) window.open(currentLink, '_blank', 'noopener');
+  });
+
+  rebuild();
+})();
+</script>
+</body>
+</html>
