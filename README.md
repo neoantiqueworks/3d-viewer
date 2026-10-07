@@ -10,6 +10,7 @@ with three.js as static files only, hosted on GitHub Pages.
 | `link-builder.html` | Internal tool: paste a Drive link, get the viewer link. |
 | `drive-test.html` | Diagnostic page from Phase 1, kept for troubleshooting. |
 | `record-test.html` | Diagnostic page: what MediaRecorder can actually produce on a given phone. Groundwork for Phase 3. |
+| `viewer-fluent.html` | Design experiment: the same viewer with its UI rebuilt on Fluent UI Web Components. |
 
 ## Phase 2: The viewer (`viewer.html`)
 
@@ -202,6 +203,92 @@ instead.
 This page makes no network requests and contains no API key: it only parses a
 string and builds a URL. `VIEWER_URL` at the top of its script is the only
 thing to change if the GitHub Pages address ever changes.
+
+## Design experiment: Fluent UI variant (`viewer-fluent.html`)
+
+The same viewer with its UI layer rebuilt on
+[Fluent UI Web Components](https://github.com/microsoft/fluentui) v3, for
+comparison against the hand-rolled UI. It is generated from `viewer.html`
+rather than hand-copied, so the CONFIG block, DEBUG and `debug=1`, the URL
+parameters, the gradient backgrounds, the per-material default background, the
+patina shader, the Drive fetch, share and close are byte-identical between the
+two files. Only the UI layer differs.
+
+### Loading without a bundler
+
+The package README documents a single pre-bundled module script from CDN. This
+page pins exact versions:
+
+| Module | Purpose |
+| --- | --- |
+| `@fluentui/web-components@3.1.3/dist/web-components-all.min.js` | Registers every component and exports `setTheme`. |
+| `@fluentui/tokens@1.0.0-alpha.24/+esm` | Supplies `webLightTheme` and `webDarkTheme`. |
+
+Both were checked to be self-contained, with no bare import specifiers, so a
+browser can load them directly with no import map and no build step.
+
+Theming is required by the library, not optional: the components are styled
+entirely through CSS variables that `setTheme` writes. The page calls it from
+`applyFluentTheme()`, which `applyBackground()` invokes, so the Fluent theme
+follows the active background.
+
+### Components used
+
+- `fluent-button` for every icon button: close, share, edit, light, dark, retry
+  and "Open again".
+- `fluent-spinner` for loading.
+- `fluent-text` for the error and end screen messages.
+- Fluent System Icons (from `@fluentui/svg-icons`, MIT) for dismiss, share,
+  edit, weather-sunny and weather-moon. The path data is inlined, so the page
+  costs no extra requests and does not depend on the icon CDN.
+
+The three material swatches stay custom, because the control *is* a color
+circle, but they take their size from the same `--swatch` token as the Fluent
+buttons and draw their selected and focus states from Fluent tokens
+(`--colorCompoundBrandStroke`, `--colorStrokeFocus2`) so they match.
+
+### Download cost
+
+Measured, not estimated:
+
+| Module | Raw | Gzip |
+| --- | --- | --- |
+| `web-components-all.min.js` | 308,613 B | 73,399 B |
+| `@fluentui/tokens` | 78,456 B | 12,566 B |
+| **Fluent total** | **387,069 B** | **85,965 B** |
+| three.js (`three.module.js` + `three.core.js`), for scale | 2,120,885 B | 419,512 B |
+
+So Fluent adds about **86 KB gzipped**, roughly a 20 percent increase over what
+the page already downloads for three.js, from a second CDN origin.
+
+### Known risks on phones
+
+Everything below is reasoned from the package contents, not observed on a
+device, because this environment has no browser:
+
+- **Button sizing.** This page needs `clamp()` sized buttons so the bars cannot
+  overlap at 320 px. Fluent sizes its own buttons internally, so the host is
+  sized here and `::part(control)` is stretched to fill it. If that part name
+  is not exposed, the buttons keep the right footprint but their internal
+  control may not fill it, leaving the tap target visually smaller.
+- **Flash of unstyled controls.** Until the module registers the elements they
+  are unknown, meaning `display: inline` and unstyled. They are hidden until
+  `:defined` matches, so on a slow phone connection the buttons appear a moment
+  after the model rather than appearing wrong.
+- **A second CDN is now a hard dependency for the UI.** If jsDelivr fails for
+  the Fluent modules, the 3D view and every handler still work, but the
+  controls stay invisible. `viewer.html` has no such dependency.
+- **The theme package is alpha.** `@fluentui/tokens` is only published under a
+  `1.0.0-alpha` tag, and it is the documented source of the themes.
+- **Shadow DOM and the canvas.** The buttons live in shadow roots, so the
+  `touch-action: manipulation` and `-webkit-tap-highlight-color` rules that
+  `viewer.html` applies to its own buttons do not reach Fluent's internal
+  control. Double-tap zoom and tap highlight behaviour on the controls may
+  differ from the custom build on both iOS Safari and Android Chrome.
+
+Both pages log which build they are in the `debug=1` diagnostics, and the
+Fluent one additionally reports whether `fluent-button`, `fluent-spinner` and
+`fluent-text` actually registered.
 
 ## Phase 3 groundwork: record capability test (`record-test.html`)
 
