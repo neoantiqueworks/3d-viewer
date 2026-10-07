@@ -9,6 +9,7 @@ with three.js as static files only, hosted on GitHub Pages.
 | `viewer.html` | The customer-facing viewer. This is the page you send out. |
 | `link-builder.html` | Internal tool: paste a Drive link, get the viewer link. |
 | `drive-test.html` | Diagnostic page from Phase 1, kept for troubleshooting. |
+| `record-test.html` | Diagnostic page: what MediaRecorder can actually produce on a given phone. Groundwork for Phase 3. |
 
 ## Phase 2: The viewer (`viewer.html`)
 
@@ -125,10 +126,54 @@ material values, the share image format and the camera framing.
 
 ### Debug output
 
-`const DEBUG = false;` at the top of the module script. With `false` the page
-is silent and shows no technical detail at any time. With `true` an on-screen
-log panel is added, which matters because a phone has no reachable browser
-console; tap the panel to dismiss it. Everything also goes to the console.
+Two ways to switch it on:
+
+- **`?debug=1` in the URL** turns the on-screen log panel on without editing
+  anything. This is the one that matters in practice, because a phone has no
+  reachable browser console.
+- **`const DEBUG_ALWAYS_ON = false;`** at the top of the module script forces it
+  on for every visit.
+
+With both off, the page is silent and shows no technical detail at any time.
+Tap the log panel to dismiss it. Everything also goes to the console.
+
+With the panel on, the page prints a diagnostic block at startup: viewer
+version, three.js revision, user agent, device pixel ratio, window and canvas
+sizes, `ColorManagement.enabled`, `renderer.outputColorSpace`, the tone mapping
+mode, **whether the background is tone mapped** (should be `false`), the active
+material and background with both gradient colors, where the background choice
+came from, the resolved CSS variables, whether the system prefers a dark color
+scheme, and the GPU vendor/renderer strings.
+
+`VIEWER_VERSION` near the top is printed in that block. Bump it when shipping,
+so a stale cached page on a phone can be told apart from a current one.
+
+### Android Chrome auto dark theme
+
+Android Chrome applies its own **Auto Dark Theme** to any page that does not
+declare that it handles dark mode itself. The algorithm inverts lightness while
+preserving hue, which turns the light beige background into a dark brown and
+darkens the round button swatches. The WebGL canvas is generally exempt, so the
+result is a page where the CSS-painted parts and the canvas disagree.
+
+The fix is to declare support for both schemes, which this page does twice, in
+the `<meta name="color-scheme">` tag and in `color-scheme` on `:root`. Do not
+remove either.
+
+### Responsive button scaling
+
+Each bar is a three-column grid, `1fr auto 1fr`, holding a start group, a
+centered group and an end group. Overlap is therefore structurally impossible:
+when the material group needs more room than its share, the column grows and
+the center button shifts slightly rather than anything colliding.
+
+Button sizes and gaps are `clamp()` expressions tied to viewport width, so they
+scale from a 320 px phone up to 480 px and then stop. The bottom bar has at
+least 67 px of free space at every width in that range, and the smallest touch
+target stays at 38 px.
+
+The earlier version positioned each cluster independently, which let the
+centered button overlap the material buttons on a narrow phone.
 
 ### The API key
 
@@ -157,6 +202,35 @@ instead.
 This page makes no network requests and contains no API key: it only parses a
 string and builds a URL. `VIEWER_URL` at the top of its script is the only
 thing to change if the GitHub Pages address ever changes.
+
+## Phase 3 groundwork: record capability test (`record-test.html`)
+
+Diagnostic page, not a customer page. Phase 3 wants one video file containing a
+still image, strokes drawn on it and a voice recording, playable in WhatsApp on
+both iOS Safari and Android Chrome. Whether that is possible at all depends on
+what `MediaRecorder` will actually produce on each phone, which cannot be
+determined from a desktop or from documentation.
+
+The page reports, all on screen:
+
+1. Whether `MediaRecorder`, `canvas.captureStream`, `getUserMedia`,
+   `navigator.share` and `navigator.canShare` exist, and whether the context is
+   secure.
+2. Every `MediaRecorder.isTypeSupported()` result for 16 video and 7 audio
+   candidate types, best first.
+3. What a real 5 second canvas-plus-microphone recording produces, including
+   **the mimeType the recorder actually chose**, which is often not the one
+   requested, plus the byte size and bitrate.
+4. Whether the browser can play back the file it just recorded.
+5. Whether the system share sheet accepts it.
+
+The canvas is animated while recording, with a moving dot, a stroke that grows
+and an on-canvas timer. That is partly because a canvas which is never drawn to
+can stop emitting frames, and partly so playback proves real frames were
+captured rather than one frozen one.
+
+Run it over **https**, not the local LAN address: `getUserMedia` and
+`navigator.share` both require a secure context.
 
 ## Phase 1: Drive fetch test (`drive-test.html`)
 

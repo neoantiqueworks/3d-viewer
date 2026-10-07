@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Record Capability Test</title>
+
+<!--
+  ===========================================================================
+  PHASE 3 CAPABILITY PROBE - diagnostic page, not a customer page.
+
+  Phase 3 wants ONE video file containing a still image, strokes drawn on it,
+  and a voice recording, playable in WhatsApp on both iOS Safari and Android
+  Chrome. Whether that is possible at all depends entirely on what
+  MediaRecorder will produce on each phone, and that cannot be determined from
+  a desktop or from documentation. This page answers it.
+
+  It reports, on screen:
+    1. Which APIs exist at all.
+    2. Every MediaRecorder.isTypeSupported() result for a long candidate list.
+    3. What a real 5 second canvas + microphone recording actually produces,
+       including the mimeType the recorder CHOSE, which is often not the one
+       that was requested.
+    4. Whether that file plays back in this browser.
+    5. Whether the system share sheet will accept it.
+
+  The canvas is animated while recording, both because a static canvas can
+  stop emitting frames and because moving content proves frames were really
+  captured rather than a single frozen one.
+  ===========================================================================
+-->
+<style>
+  /* ---- Page chrome ---------------------------------------------------- */
+  html, body {
+    margin: 0;
+    background: #f4f5f7;
+    color: #23262a;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 15px;
+    line-height: 1.5;
+  }
+  main { max-width: 720px; margin: 0 auto; padding: 16px 14px 48px; box-sizing: border-box; }
+  h1 { font-size: 19px; margin: 4px 0 14px; }
+
+  section {
+    background: #fff;
+    border: 1px solid #e2e4e8;
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin-bottom: 12px;
+  }
+  section h2 {
+    font-size: 12.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #6b7075;
+    margin: 0 0 8px;
+  }
+
+  /* ---- Controls ------------------------------------------------------- */
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  button {
+    font: inherit;
+    font-size: 15px;
+    padding: 11px 18px;
+    border-radius: 7px;
+    border: 1px solid #c6cad0;
+    background: #fff;
+    color: #23262a;
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+  button.primary {
+    background: #2b6cb0;
+    border-color: #2b6cb0;
+    color: #fff;
+    font-weight: 600;
+  }
+  button.danger { background: #b3261e; border-color: #b3261e; color: #fff; font-weight: 600; }
+  button:disabled { opacity: 0.45; cursor: default; }
+
+  /* ---- Preview canvas and playback ------------------------------------ */
+  /* The canvas is deliberately small: a big one on a phone can hit encoder
+     limits and would muddy the result of this test. */
+  #stage {
+    display: block;
+    width: 100%;
+    max-width: 320px;
+    height: auto;
+    border: 1px solid #c6cad0;
+    border-radius: 8px;
+    background: #000;
+  }
+  #playback { display: block; width: 100%; max-width: 320px; border-radius: 8px; background: #000; }
+  #playback[hidden] { display: none !important; }
+
+  /* ---- On-screen log -------------------------------------------------- */
+  /* A phone has no reachable console, so every result goes here. */
+  #log {
+    background: #1b1b1b;
+    color: #ddd;
+    font-family: Menlo, Consolas, monospace;
+    font-size: 11.5px;
+    line-height: 1.45;
+    padding: 8px 10px;
+    border-radius: 8px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 60vh;
+    overflow-y: auto;
+  }
+  #log .ok   { color: #8fdc8f; }
+  #log .err  { color: #ff8f8f; }
+  #log .warn { color: #ffd479; }
+  #log .head { color: #9ec9ff; font-weight: 700; }
+  #log .ts   { color: #8a8a8a; }
+</style>
+</head>
+
+<body>
+<main>
+
+  <h1>Record Capability Test</h1>
+
+  <!-- Step 1 runs by itself on load -->
+  <section>
+    <h2>1. Environment and codec support</h2>
+    <div class="row">
+      <button id="rescanBtn" type="button">Run scan again</button>
+      <button id="copyLogBtn" type="button">Copy log</button>
+    </div>
+  </section>
+
+  <!-- Step 2: the real recording -->
+  <section>
+    <h2>2. Record 5 seconds of canvas plus microphone</h2>
+    <canvas id="stage" width="320" height="320"></canvas>
+    <div class="row" style="margin-top: 10px;">
+      <button id="recordBtn" class="primary" type="button">Start 5 s recording</button>
+      <button id="stopBtn" class="danger" type="button" disabled>Stop now</button>
+    </div>
+    <p id="recordNote" style="font-size: 12.5px; color: #6b7075; margin: 8px 0 0;">
+      The microphone is requested when you press Start. Say something while it
+      records, so the playback proves audio was captured.
+    </p>
+  </section>
+
+  <!-- Step 3: playback and share -->
+  <section>
+    <h2>3. Playback and share</h2>
+    <video id="playback" controls playsinline hidden></video>
+    <div class="row" style="margin-top: 10px;">
+      <button id="shareBtn" type="button" disabled>Share the recording</button>
+      <button id="downloadBtn" type="button" disabled>Download it</button>
+    </div>
+  </section>
+
+  <!-- Results -->
+  <section>
+    <h2>4. Log</h2>
+    <div id="log"></div>
+  </section>
+
+</main>
+
+<script>
+(function () {
+  'use strict';
+
+  /* =======================================================================
+     CONFIG
+     ======================================================================= */
+
+  var RECORD_SECONDS = 5;        // length of the automatic test recording
+  var RECORD_FPS = 25;           // frame rate requested from captureStream
+
+  /* The candidate list, best first. Phase 3 will walk this same order and take
+     the first supported entry. MP4 with H.264 and AAC is what WhatsApp wants;
+     WebM is what Android Chrome has historically produced instead and what
+     WhatsApp rejects. The audio-only entries are for the fallback where no
+     video format works at all. */
+  var VIDEO_CANDIDATES = [
+    'video/mp4;codecs="avc1.42E01E,mp4a.40.2"',
+    'video/mp4;codecs="avc1.4D401E,mp4a.40.2"',
+    'video/mp4;codecs=avc1,mp4a.40.2',
+    'video/mp4;codecs=avc1.42E01E',
+    'video/mp4;codecs=avc1',
+    'video/mp4;codecs=h264',
+    'video/mp4',
+    'video/quicktime',
+    'video/x-matroska;codecs=avc1',
+    'video/webm;codecs="vp9,opus"',
+    'video/webm;codecs="vp8,opus"',
+    'video/webm;codecs=h264',
+    'video/webm;codecs=av01',
+    'video/webm;codecs=vp9',
+    'video/webm;codecs=vp8',
+    'video/webm'
+  ];
+
+  var AUDIO_CANDIDATES = [
+    'audio/mp4;codecs=mp4a.40.2',
+    'audio/mp4',
+    'audio/aac',
+    'audio/mpeg',
+    'audio/webm;codecs=opus',
+    'audio/webm',
+    'audio/ogg;codecs=opus'
+  ];
+
+  /* =======================================================================
+     LOGGING
+     Everything on screen; a phone has no reachable console. Also mirrored to
+     the console for desktop use.
+     ======================================================================= */
+  var logEl = document.getElementById('log');
+
+  function stamp() {
+    var d = new Date();
+    function pad(n, w) { return String(n).padStart(w, '0'); }
+    return pad(d.getHours(), 2) + ':' + pad(d.getMinutes(), 2) + ':' +
+      pad(d.getSeconds(), 2) + '.' + pad(d.getMilliseconds(), 3);
+  }
+
+  function log(text, level) {
+    var line = document.createElement('div');
+    var ts = document.createElement('span');
+    ts.className = 'ts';
+    ts.textContent = stamp() + ' ';
+    var msg = document.createElement('span');
+    if (level) msg.className = level;
+    msg.textContent = text;
+    line.appendChild(ts);
+    line.appendChild(msg);
+    logEl.appendChild(line);
+    logEl.scrollTop = logEl.scrollHeight;
+    if (level === 'err') console.error(text); else console.log(text);
+    return msg;
+  }
+
+  function heading(text) { log(text, 'head'); }
+
+  function formatBytes(n) {
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    return (n / (1024 * 1024)).toFixed(2) + ' MB';
+  }
+
+  /* =======================================================================
+     STEP 1: ENVIRONMENT AND CODEC SCAN
+     ======================================================================= */
+
+  // Records what the scan found so later steps can reuse it.
+  var scan = { bestVideo: null, bestAudio: null, hasRecorder: false };
+
+  function scanEnvironment() {
+    heading('=== ENVIRONMENT ===');
+    log('user agent: ' + navigator.userAgent);
+    log('platform: ' + (navigator.platform || '(not reported)'));
+    log('screen: ' + window.screen.width + ' x ' + window.screen.height +
+      ' css px, dpr ' + window.devicePixelRatio);
+    log('location: ' + location.href);
+
+    // Everything in Phase 3 needs a secure context: getUserMedia and
+    // navigator.share both refuse to work without one. A plain http LAN
+    // address is NOT secure, which is why this must be tested over https.
+    log('isSecureContext: ' + window.isSecureContext,
+      window.isSecureContext ? 'ok' : 'err');
+    if (!window.isSecureContext) {
+      log('Not a secure context. The microphone and the share sheet will both ' +
+        'be unavailable. Open this page over https.', 'err');
+    }
+
+    heading('=== API PRESENCE ===');
+    var hasRecorder = typeof window.MediaRecorder !== 'undefined';
+    var hasCapture = typeof document.createElement('canvas').captureStream === 'function';
+    var hasUserMedia = !!(navigator.mediaDevices &&
+      typeof navigator.mediaDevices.getUserMedia === 'function');
+    var hasShare = typeof navigator.share === 'function';
+    var hasCanShare = typeof navigator.canShare === 'function';
+
+    scan.hasRecorder = hasRecorder;
+
+    log('MediaRecorder: ' + hasRecorder, hasRecorder ? 'ok' : 'err');
+    log('canvas.captureStream: ' + hasCapture, hasCapture ? 'ok' : 'err');
+    log('navigator.mediaDevices.getUserMedia: ' + hasUserMedia, hasUserMedia ? 'ok' : 'err');
+    log('navigator.share: ' + hasShare, hasShare ? 'ok' : 'warn');
+    log('navigator.canShare: ' + hasCanShare, hasCanShare ? 'ok' : 'warn');
+    log('MediaStream constructor: ' + (typeof window.MediaStream !== 'undefined'),
+      typeof window.MediaStream !== 'undefined' ? 'ok' : 'err');
+
+    if (!hasRecorder) {
+      log('MediaRecorder is missing, so no video can be produced on this ' +
+        'browser at all. Phase 3 would have to fall back to the annotated ' +
+        'image plus a separate audio file, or image only.', 'err');
+      return;
+    }
+    if (typeof MediaRecorder.isTypeSupported !== 'function') {
+      log('MediaRecorder exists but isTypeSupported does not, so support ' +
+        'cannot be queried; the recording step will have to just try.', 'warn');
+      return;
+    }
+
+    heading('=== VIDEO CONTAINER AND CODEC SUPPORT ===');
+    scan.bestVideo = reportCandidates(VIDEO_CANDIDATES);
+
+    heading('=== AUDIO ONLY SUPPORT (for the fallback) ===');
+    scan.bestAudio = reportCandidates(AUDIO_CANDIDATES);
+
+    heading('=== VERDICT ===');
+    if (scan.bestVideo) {
+      var isMp4 = scan.bestVideo.indexOf('mp4') !== -1 ||
+        scan.bestVideo.indexOf('quicktime') !== -1;
+      log('best video type: ' + scan.bestVideo, 'ok');
+      if (isMp4) {
+        log('This is an MP4 family type, which is what WhatsApp accepts. ' +
+          'Phase 3 can record video directly. Confirm with step 2, because ' +
+          'isTypeSupported can be optimistic.', 'ok');
+      } else {
+        log('The best available type is NOT MP4. WhatsApp generally rejects ' +
+          'WebM. Phase 3 would need a fallback decision for this browser.', 'warn');
+      }
+    } else {
+      log('No video type is supported for recording.', 'err');
+    }
+    log('best audio-only type: ' + (scan.bestAudio || 'none'),
+      scan.bestAudio ? 'ok' : 'err');
+  }
+
+  // Prints one line per candidate and returns the first supported one.
+  function reportCandidates(list) {
+    var best = null;
+    for (var i = 0; i < list.length; i++) {
+      var type = list[i];
+      var supported = false;
+      try {
+        supported = MediaRecorder.isTypeSupported(type);
+      } catch (err) {
+        log('  ' + type + ' -> threw ' + err.name, 'err');
+        continue;
+      }
+      log('  ' + (supported ? 'YES ' : 'no  ') + type, supported ? 'ok' : null);
+      if (supported && !best) best = type;
+    }
+    return best;
+  }
+
+  /* =======================================================================
+     ANIMATED CANVAS
+     Drawn continuously while recording. Two reasons: a canvas that is never
+     drawn to can stop producing frames for captureStream, and visibly moving
+     content proves on playback that real frames were captured.
+     ======================================================================= */
+  var stage = document.getElementById('stage');
+  var ctx = stage.getContext('2d');
+  var animating = false;
+  var animationStart = 0;
+
+  function drawFrame(now) {
+    var seconds = (now - animationStart) / 1000;
+
+    // Background, standing in for the frozen model view of Phase 3.
+    ctx.fillStyle = '#15161a';
+    ctx.fillRect(0, 0, stage.width, stage.height);
+
+    // A moving dot on a circular path: the proof of motion.
+    var angle = seconds * 1.6;
+    var cx = stage.width / 2 + Math.cos(angle) * 90;
+    var cy = stage.height / 2 + Math.sin(angle) * 90;
+    ctx.fillStyle = '#e8503a';
+    ctx.beginPath();
+    ctx.arc(cx, cy, 16, 0, Math.PI * 2);
+    ctx.fill();
+
+    // A stroke that grows over time, standing in for a pen stroke drawn while
+    // recording. If this appears complete from the first frame of playback,
+    // only one frame was captured.
+    ctx.strokeStyle = '#ffd479';
+    ctx.lineWidth = 5;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    for (var i = 0; i <= Math.min(seconds, RECORD_SECONDS) * 40; i++) {
+      var t = i / 40;
+      var x = 30 + t * 52;
+      var y = stage.height - 40 - Math.sin(t * 2.2) * 30;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    // An on-canvas timer, so playback shows time really advancing.
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 22px monospace';
+    ctx.textBaseline = 'top';
+    ctx.fillText(seconds.toFixed(1) + ' s', 12, 12);
+
+    if (animating) requestAnimationFrame(drawFrame);
+  }
+
+  function startAnimation() {
+    if (animating) return;
+    animating = true;
+    animationStart = performance.now();
+    requestAnimationFrame(drawFrame);
+  }
+
+  function stopAnimation() { animating = false; }
+
+  // Draw one idle frame so the canvas is not blank before the test runs.
+  animationStart = performance.now();
+  drawFrame(performance.now());
+
+  /* =======================================================================
+     STEP 2: THE REAL RECORDING
+     ======================================================================= */
+  var recordBtn = document.getElementById('recordBtn');
+  var stopBtn = document.getElementById('stopBtn');
+  var shareBtn = document.getElementById('shareBtn');
+  var downloadBtn = document.getElementById('downloadBtn');
+  var playback = document.getElementById('playback');
+
+  var recorder = null;
+  var chunks = [];
+  var micStream = null;
+  var recordedFile = null;
+  var recordedUrl = null;
+  var autoStopTimer = null;
+  var startedAt = 0;
+
+  function resetRecording() {
+    if (recordedUrl) { URL.revokeObjectURL(recordedUrl); recordedUrl = null; }
+    recordedFile = null;
+    chunks = [];
+    playback.hidden = true;
+    playback.removeAttribute('src');
+    shareBtn.disabled = true;
+    downloadBtn.disabled = true;
+  }
+
+  async function startRecording() {
+    resetRecording();
+    recordBtn.disabled = true;
+
+    heading('=== RECORDING ===');
+
+    // --- Microphone. Asked for here, which is the equivalent of Phase 3
+    // asking on the first tap of the record button. ---
+    try {
+      log('requesting microphone...');
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      var tracks = micStream.getAudioTracks();
+      log('microphone granted, ' + tracks.length + ' audio track(s)', 'ok');
+      if (tracks[0]) {
+        log('  track label: ' + (tracks[0].label || '(none)'));
+        var settings = tracks[0].getSettings ? tracks[0].getSettings() : {};
+        log('  track settings: ' + JSON.stringify(settings));
+      }
+    } catch (err) {
+      log('microphone denied or unavailable: ' + err.name + ': ' + err.message, 'err');
+      log('Phase 3 must keep drawing and image sharing working in this case, ' +
+        'with the record button in a disabled state.', 'warn');
+      micStream = null;
+    }
+
+    // --- Canvas video track ---
+    var canvasStream;
+    try {
+      canvasStream = stage.captureStream(RECORD_FPS);
+      log('canvas.captureStream(' + RECORD_FPS + ') gave ' +
+        canvasStream.getVideoTracks().length + ' video track(s)', 'ok');
+    } catch (err) {
+      log('canvas.captureStream failed: ' + err.name + ': ' + err.message, 'err');
+      recordBtn.disabled = false;
+      return;
+    }
+
+    // --- Combine into one stream, which is what makes ONE file ---
+    var combined;
+    try {
+      var all = canvasStream.getVideoTracks();
+      if (micStream) all = all.concat(micStream.getAudioTracks());
+      combined = new MediaStream(all);
+      log('combined stream: ' + combined.getVideoTracks().length + ' video + ' +
+        combined.getAudioTracks().length + ' audio track(s)', 'ok');
+    } catch (err) {
+      log('could not combine tracks: ' + err.message, 'err');
+      recordBtn.disabled = false;
+      return;
+    }
+
+    // --- Pick a type and build the recorder ---
+    var wanted = scan.bestVideo;
+    var options = {};
+    if (wanted) options.mimeType = wanted;
+    log('requesting mimeType: ' + (wanted || '(browser default)'));
+
+    try {
+      recorder = new MediaRecorder(combined, options);
+    } catch (err) {
+      log('MediaRecorder rejected that type: ' + err.name + ': ' + err.message, 'err');
+      log('retrying with no mimeType at all...', 'warn');
+      try {
+        recorder = new MediaRecorder(combined);
+      } catch (err2) {
+        log('MediaRecorder could not be created at all: ' + err2.message, 'err');
+        recordBtn.disabled = false;
+        return;
+      }
+    }
+
+    // The type the recorder actually chose. This is the number that matters:
+    // it is frequently different from what was requested.
+    log('recorder.mimeType (ACTUAL): ' + recorder.mimeType, 'ok');
+    if (wanted && recorder.mimeType && recorder.mimeType.split(';')[0] !== wanted.split(';')[0]) {
+      log('The container differs from the request. The ACTUAL type is what ' +
+        'Phase 3 has to live with.', 'warn');
+    }
+
+    recorder.ondataavailable = function (event) {
+      if (event.data && event.data.size > 0) {
+        chunks.push(event.data);
+        log('chunk: ' + formatBytes(event.data.size));
+      }
+    };
+
+    recorder.onerror = function (event) {
+      log('recorder error: ' + (event.error ? event.error.name : 'unknown'), 'err');
+    };
+
+    // Finalizing here, on stop, is the whole point: Phase 3 needs the file
+    // ready BEFORE Share is tapped, because navigator.share must be called
+    // inside the tap gesture and cannot wait for an async stop.
+    recorder.onstop = function () {
+      stopAnimation();
+      var elapsed = (performance.now() - startedAt) / 1000;
+      var type = recorder.mimeType || 'video/webm';
+      var blob = new Blob(chunks, { type: type });
+
+      heading('=== RESULT ===');
+      log('recorded ' + elapsed.toFixed(2) + ' s', 'ok');
+      log('blob type: ' + blob.type);
+      log('blob size: ' + formatBytes(blob.size) +
+        ' (' + (blob.size / Math.max(elapsed, 0.01) / 1024).toFixed(0) + ' KB/s)',
+        blob.size > 0 ? 'ok' : 'err');
+
+      if (blob.size === 0) {
+        log('The recording is empty. Frames or audio never reached the ' +
+          'recorder.', 'err');
+        cleanupMic();
+        recordBtn.disabled = false;
+        stopBtn.disabled = true;
+        return;
+      }
+
+      var extension = type.indexOf('mp4') !== -1 ? 'mp4'
+        : type.indexOf('quicktime') !== -1 ? 'mov'
+        : type.indexOf('matroska') !== -1 ? 'mkv'
+        : type.indexOf('ogg') !== -1 ? 'ogg' : 'webm';
+      recordedFile = new File([blob], 'record-test.' + extension, { type: type });
+      log('file: ' + recordedFile.name + ', type ' + recordedFile.type);
+
+      // Playback, which proves the file is decodable by this browser.
+      recordedUrl = URL.createObjectURL(blob);
+      playback.src = recordedUrl;
+      playback.hidden = false;
+      playback.onloadedmetadata = function () {
+        log('playback metadata: ' + playback.videoWidth + ' x ' + playback.videoHeight +
+          ', duration ' + (isFinite(playback.duration) ? playback.duration.toFixed(2) + ' s'
+            : '(not reported)'),
+          playback.videoWidth > 0 ? 'ok' : 'err');
+        if (playback.videoWidth === 0) {
+          log('No video dimensions, so the file may be audio only.', 'err');
+        }
+      };
+      playback.onerror = function () {
+        log('This browser cannot play back the file it just recorded.', 'err');
+      };
+
+      // Will the share sheet take it?
+      if (typeof navigator.canShare === 'function') {
+        var can = false;
+        try { can = navigator.canShare({ files: [recordedFile] }); } catch (e) { can = false; }
+        log('navigator.canShare({files:[video]}): ' + can, can ? 'ok' : 'err');
+        if (!can) {
+          log('The share sheet will not accept this file type or size. Phase 3 ' +
+            'would have to download it instead.', 'warn');
+        }
+      } else {
+        log('navigator.canShare is unavailable, so file sharing cannot be ' +
+          'checked up front.', 'warn');
+      }
+
+      shareBtn.disabled = !recordedFile;
+      downloadBtn.disabled = !recordedFile;
+      cleanupMic();
+      recordBtn.disabled = false;
+      stopBtn.disabled = true;
+      heading('=== DONE. Press "Share the recording" to test the share sheet. ===');
+    };
+
+    // --- Go ---
+    startAnimation();
+    startedAt = performance.now();
+    try {
+      recorder.start();
+      log('recorder.start() called, state: ' + recorder.state, 'ok');
+    } catch (err) {
+      log('recorder.start() threw: ' + err.name + ': ' + err.message, 'err');
+      stopAnimation();
+      cleanupMic();
+      recordBtn.disabled = false;
+      return;
+    }
+
+    stopBtn.disabled = false;
+    autoStopTimer = setTimeout(function () {
+      log('auto-stopping after ' + RECORD_SECONDS + ' s');
+      stopRecording();
+    }, RECORD_SECONDS * 1000);
+  }
+
+  function stopRecording() {
+    if (autoStopTimer) { clearTimeout(autoStopTimer); autoStopTimer = null; }
+    if (recorder && recorder.state !== 'inactive') {
+      log('recorder.stop() called at state: ' + recorder.state);
+      recorder.stop();
+    }
+  }
+
+  // The microphone must be released or the phone keeps showing a recording
+  // indicator.
+  function cleanupMic() {
+    if (!micStream) return;
+    micStream.getTracks().forEach(function (t) { t.stop(); });
+    micStream = null;
+    log('microphone released');
+  }
+
+  /* =======================================================================
+     STEP 3: SHARE AND DOWNLOAD
+     navigator.share is called straight from the tap with no await before it,
+     because iOS Safari only permits it inside the gesture. The file already
+     exists, which is exactly the arrangement Phase 3 relies on.
+     ======================================================================= */
+  shareBtn.addEventListener('click', function () {
+    if (!recordedFile) return;
+    heading('=== SHARE ===');
+    log('sharing ' + recordedFile.name + ' (' + formatBytes(recordedFile.size) + ')');
+
+    if (typeof navigator.share !== 'function') {
+      log('navigator.share is unavailable on this browser.', 'err');
+      return;
+    }
+    navigator.share({ files: [recordedFile] }).then(function () {
+      log('share resolved. Note this often resolves even when the user backs ' +
+        'out, so it does not prove the file was actually sent.', 'ok');
+    }).catch(function (err) {
+      if (err && err.name === 'AbortError') {
+        log('share aborted (user dismissed the sheet).', 'warn');
+      } else {
+        log('share failed: ' + (err ? err.name + ': ' + err.message : 'unknown'), 'err');
+      }
+    });
+  });
+
+  downloadBtn.addEventListener('click', function () {
+    if (!recordedFile) return;
+    var url = URL.createObjectURL(recordedFile);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = recordedFile.name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
+    log('download triggered for ' + recordedFile.name);
+  });
+
+  /* =======================================================================
+     WIRING
+     ======================================================================= */
+  recordBtn.addEventListener('click', startRecording);
+  stopBtn.addEventListener('click', stopRecording);
+
+  document.getElementById('rescanBtn').addEventListener('click', function () {
+    logEl.textContent = '';
+    scanEnvironment();
+  });
+
+  document.getElementById('copyLogBtn').addEventListener('click', function () {
+    var text = logEl.innerText || logEl.textContent || '';
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () {
+        log('log copied to the clipboard.', 'ok');
+      }).catch(function () {
+        log('could not copy; select the log text by hand.', 'err');
+      });
+    } else {
+      log('clipboard unavailable; select the log text by hand.', 'err');
+    }
+  });
+
+  // Release the microphone if the page is closed mid-recording.
+  window.addEventListener('pagehide', cleanupMic);
+
+  /* =======================================================================
+     STARTUP
+     ======================================================================= */
+  scanEnvironment();
+})();
+</script>
+</body>
+</html>

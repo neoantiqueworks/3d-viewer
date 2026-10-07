@@ -8,6 +8,13 @@
 <!-- Tints the browser UI to match the top of the gradient. Kept in sync with
      CONFIG.background by applyBackground(). -->
 <meta name="theme-color" content="#15161a">
+<!-- Declaring both schemes tells the browser this page handles light and dark
+     itself. Without it, Android Chrome's Auto Dark Theme rewrites the page's
+     CSS colors when the phone is in dark mode: it inverts lightness while
+     keeping hue, which turns the light beige background into a dark brown.
+     This page already has its own light and dark backgrounds, so the automatic
+     treatment must be switched off. -->
+<meta name="color-scheme" content="light dark">
 <title>3D Viewer</title>
 
 <!--
@@ -24,9 +31,18 @@
 <style>
   /* ---- Layout tokens -------------------------------------------------- */
   :root {
-    --gap: 14px;                                     /* edge margin */
-    --btn: 52px;                                     /* icon button size */
-    --swatch: 46px;                                  /* material swatch size */
+    /* Matches the color-scheme meta tag: this page supplies its own light and
+       dark looks, so the browser must not invent one. */
+    color-scheme: light dark;
+
+    /* Everything scales with viewport width so the bars stay clear of each
+       other on a 320 px phone and stop growing on a wide one. The vw terms are
+       what make the three material buttons, the center button and Share fit in
+       one row at every width from 320 to 480 px, portrait. */
+    --gap: clamp(8px, 3vw, 14px);                    /* edge margin */
+    --btn: clamp(42px, 12.5vw, 52px);                /* icon button size */
+    --swatch: clamp(38px, 11.5vw, 46px);             /* material swatch size */
+    --group-gap: clamp(6px, 2.5vw, 10px);            /* between buttons in a group */
     /* Safe areas keep the buttons clear of the notch and the home bar. */
     --edge-top:    calc(env(safe-area-inset-top, 0px) + var(--gap));
     --edge-bottom: calc(env(safe-area-inset-bottom, 0px) + var(--gap));
@@ -79,21 +95,51 @@
     pointer-events: none;                            /* canvas stays reachable */
     z-index: 21;
   }
-  #ui .cluster { position: fixed; display: flex; gap: 10px; align-items: center; }
-  #ui .cluster > * { pointer-events: auto; }         /* buttons are tappable */
+  /* Two bars, each a three column grid: start group, centered group, end
+     group. The grid is what makes overlap structurally impossible. The centre
+     column is exactly centred while the two 1fr columns have room to spare,
+     and if the start group ever needs more than its share the column simply
+     grows and the centre shifts slightly instead of anything colliding. The
+     old approach positioned each cluster independently, so a wide start group
+     and a centred button could and did overlap on a narrow phone. */
+  #ui .bar {
+    position: fixed;
+    left: 0;
+    right: 0;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: var(--gap);
+    box-sizing: border-box;
+  }
+  #ui .bar-top {
+    top: 0;
+    padding: var(--edge-top) var(--edge-right) 0 var(--edge-left);
+  }
+  #ui .bar-bottom {
+    bottom: 0;
+    padding: 0 var(--edge-right) var(--edge-bottom) var(--edge-left);
+  }
 
-  .at-top-left     { top: var(--edge-top);       left: var(--edge-left); }
-  .at-top-right    { top: var(--edge-top);       right: var(--edge-right); }
-  .at-bottom-left  { bottom: var(--edge-bottom);  left: var(--edge-left); }
-  .at-bottom-right { bottom: var(--edge-bottom);  right: var(--edge-right); }
-  .at-bottom-center{ bottom: var(--edge-bottom);  left: 50%; transform: translateX(-50%); }
+  #ui .group { display: flex; align-items: center; gap: var(--group-gap); }
+  #ui .group > * { pointer-events: auto; }           /* buttons are tappable */
+  #ui .group-start  { justify-self: start; }
+  #ui .group-center { justify-self: center; }
+  #ui .group-end    { justify-self: end; }
 
   /* While loading there is nothing to apply a material to or to share, and on
      the error card only Close makes sense. Hiding the rest avoids buttons that
      would do nothing when tapped. */
-  body.state-loading #ui .at-bottom-left,
-  body.state-loading #ui .at-bottom-right,
-  body.state-error #ui .cluster:not(.at-top-right) { display: none; }
+  body.state-loading #matGroup,
+  body.state-loading #shareGroup,
+  body.state-error #ui .group:not(#closeGroup) { display: none; }
+
+  /* The hidden attribute is applied by the UA stylesheet, so ANY author level
+     display rule outranks it. .btn and .group both set display, which is how
+     the hidden Edit button ended up visible. This blanket rule makes hidden
+     authoritative everywhere and is the reason the element specific
+     .overlay[hidden] and #debugLog[hidden] rules below are now redundant. */
+  [hidden] { display: none !important; }
 
   /* ---- Round buttons -------------------------------------------------- */
   button {
@@ -285,14 +331,21 @@
 -->
 <div id="ui">
 
-  <!-- Top left: background presets, light then dark -->
-  <div class="cluster at-top-left">
+  <!-- ===== Top bar: background presets at the left, close at the right ===== -->
+  <div class="bar bar-top">
+
+  <!-- Background presets, light then dark -->
+  <div class="group group-start">
     <button id="bgLight" class="swatch" type="button" aria-pressed="false" aria-label="Light background"></button>
     <button id="bgDark"  class="swatch" type="button" aria-pressed="true"  aria-label="Dark background"></button>
   </div>
 
-  <!-- Top right: close -->
-  <div class="cluster at-top-right">
+  <!-- Nothing in the middle of the top bar; the spacer keeps the grid at three
+       columns so the top and bottom bars align. -->
+  <div class="group group-center"></div>
+
+  <!-- Close -->
+  <div class="group group-end" id="closeGroup">
     <button id="closeBtn" class="btn" type="button" aria-label="Close">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
            stroke-linecap="round" aria-hidden="true">
@@ -302,17 +355,23 @@
     </button>
   </div>
 
-  <!-- Bottom left: material presets, chrome then aged bronze then anthracite.
-       The inline background colors are replaced at startup from CONFIG so the
-       swatches always match the real material colors. -->
-  <div class="cluster at-bottom-left">
+  </div><!-- /bar-top -->
+
+  <!-- ===== Bottom bar: materials, center action, share ===== -->
+  <div class="bar bar-bottom">
+
+  <!-- Material presets, chrome then aged bronze then anthracite. The swatch
+       colors are replaced at startup from CONFIG so the buttons always match
+       the real material colors. -->
+  <div class="group group-start" id="matGroup">
     <button id="matChrome"     class="swatch" type="button" aria-pressed="true"  aria-label="Chrome"></button>
     <button id="matBronze"     class="swatch" type="button" aria-pressed="false" aria-label="Aged bronze"></button>
     <button id="matAnthracite" class="swatch" type="button" aria-pressed="false" aria-label="Anthracite"></button>
   </div>
 
-  <!-- Bottom center: Edit. Phase 3 feature, hidden for now. -->
-  <div class="cluster at-bottom-center">
+  <!-- Center: Edit. Phase 3 feature, hidden until that screen exists. The
+       hidden attribute is now enforced by the [hidden] rule in the styles. -->
+  <div class="group group-center" id="centerGroup">
     <button id="editBtn" class="btn" type="button" aria-label="Edit" hidden>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -322,8 +381,8 @@
     </button>
   </div>
 
-  <!-- Bottom right: share -->
-  <div class="cluster at-bottom-right">
+  <!-- Share -->
+  <div class="group group-end" id="shareGroup">
     <button id="shareBtn" class="btn" type="button" aria-label="Share">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -334,6 +393,8 @@
       </svg>
     </button>
   </div>
+
+  </div><!-- /bar-bottom -->
 
 </div>
 
@@ -403,7 +464,18 @@
      what the customer sees: when true an on-screen log panel is added, when
      false the page stays silent and shows no technical detail at all.
      ========================================================================= */
-  const DEBUG = false;
+  // File level switch: set to true to force the log panel on for every visit.
+  const DEBUG_ALWAYS_ON = false;
+
+  // debug=1 in the URL turns the on-screen log panel on without editing this
+  // file, which is the only practical way to diagnose a real phone. Read
+  // straight from location so DEBUG is settled before the first log() call.
+  const DEBUG = DEBUG_ALWAYS_ON ||
+    new URLSearchParams(location.search).get('debug') === '1';
+
+  // Bumped by hand when something ships, and printed in the diagnostics, so a
+  // stale cached page can be told apart from a current one at a glance.
+  const VIEWER_VERSION = '2026-10-07c';
 
   const CONFIG = {
 
@@ -1338,7 +1410,98 @@
      STARTUP
      ========================================================================= */
   window.__viewerReady = true;   // tells the watchdog three.js arrived
-  log('three.js r' + THREE.REVISION + ' ready. Protocol ' + location.protocol);
+
+  /* Everything needed to tell apart the ways this page can look wrong on a
+     device with no reachable console. Only runs with the log panel on. */
+  function logDiagnostics() {
+    if (!DEBUG) return;
+
+    log('--- diagnostics ---');
+    log('viewer version: ' + VIEWER_VERSION);
+    log('three.js: r' + THREE.REVISION);
+    log('url: ' + location.href);
+    log('user agent: ' + navigator.userAgent);
+
+    // Display and canvas geometry.
+    log('device pixel ratio: ' + window.devicePixelRatio +
+      ' (renderer is capped at ' + CONFIG.maxPixelRatio + ')');
+    log('window: ' + window.innerWidth + ' x ' + window.innerHeight + ' css px');
+    log('canvas css: ' + canvas.clientWidth + ' x ' + canvas.clientHeight);
+    log('canvas buffer: ' + canvas.width + ' x ' + canvas.height);
+
+    // Color pipeline. If the background ever looks wrong, this is where the
+    // answer is: output color space, tone mapping, and crucially whether tone
+    // mapping is applied to the BACKGROUND, which three.js decides from the
+    // background texture's color space.
+    log('ColorManagement.enabled: ' + THREE.ColorManagement.enabled);
+    log('renderer.outputColorSpace: ' + renderer.outputColorSpace);
+    log('renderer.toneMapping: ' + toneMappingName(renderer.toneMapping) +
+      ', exposure ' + renderer.toneMappingExposure);
+
+    const activeTexture = backgroundTextures[backgroundKey];
+    let backgroundToneMapped = '(could not determine)';
+    try {
+      // The exact expression three.js uses for the background material.
+      backgroundToneMapped = String(
+        THREE.ColorManagement.getTransfer(activeTexture.colorSpace) !== THREE.SRGBTransfer);
+    } catch (err) {
+      backgroundToneMapped = 'error: ' + err.message;
+    }
+    log('background texture colorSpace: ' + activeTexture.colorSpace);
+    log('background tone mapped: ' + backgroundToneMapped + '  (false is correct)');
+
+    // Which background is actually active, and with which colors.
+    const spec = CONFIG.background[backgroundKey];
+    log('active material: ' + materialKey + ' (' + CONFIG.materials[materialKey].label + ')');
+    log('active background: ' + backgroundKey +
+      '  top ' + spec.top + '  bottom ' + spec.bottom);
+    log('bg came from: ' + (backgroundExplicit
+      ? 'the bg URL parameter'
+      : 'the material default for ' + materialKey));
+
+    // Did the CSS variables actually take? These drive the overlay screens.
+    const rootStyle = getComputedStyle(document.documentElement);
+    log('css --bg-top: ' + rootStyle.getPropertyValue('--bg-top').trim() +
+      ', --bg-bottom: ' + rootStyle.getPropertyValue('--bg-bottom').trim());
+    log('css --btn: ' + rootStyle.getPropertyValue('--btn').trim() +
+      ', --swatch: ' + rootStyle.getPropertyValue('--swatch').trim() +
+      ', --gap: ' + rootStyle.getPropertyValue('--gap').trim());
+
+    // A dark system theme is what makes Android Chrome want to auto-darken the
+    // page. The color-scheme meta tag is what stops it; if this says true and
+    // the CSS colors still look inverted, that tag is not being honored.
+    log('prefers-color-scheme dark: ' +
+      window.matchMedia('(prefers-color-scheme: dark)').matches);
+    log('body classes: ' + document.body.className);
+
+    // GPU identity, useful when something renders differently on one device.
+    try {
+      const gl = renderer.getContext();
+      const info = gl.getExtension('WEBGL_debug_renderer_info');
+      if (info) {
+        log('gl vendor: ' + gl.getParameter(info.UNMASKED_VENDOR_WEBGL));
+        log('gl renderer: ' + gl.getParameter(info.UNMASKED_RENDERER_WEBGL));
+      }
+      log('gl version: ' + gl.getParameter(gl.VERSION));
+      log('max texture size: ' + gl.getParameter(gl.MAX_TEXTURE_SIZE));
+    } catch (err) {
+      log('gl info unavailable: ' + err.message);
+    }
+    log('--- end diagnostics ---');
+  }
+
+  // three.js tone mapping constants are numbers; this turns one into a name.
+  function toneMappingName(value) {
+    const names = {};
+    names[THREE.NoToneMapping] = 'NoToneMapping';
+    names[THREE.LinearToneMapping] = 'LinearToneMapping';
+    names[THREE.ReinhardToneMapping] = 'ReinhardToneMapping';
+    names[THREE.CineonToneMapping] = 'CineonToneMapping';
+    names[THREE.ACESFilmicToneMapping] = 'ACESFilmicToneMapping';
+    if (THREE.AgXToneMapping !== undefined) names[THREE.AgXToneMapping] = 'AgXToneMapping';
+    if (THREE.NeutralToneMapping !== undefined) names[THREE.NeutralToneMapping] = 'NeutralToneMapping';
+    return names[value] !== undefined ? names[value] : 'unknown (' + value + ')';
+  }
 
   buildEnvironment();
 
@@ -1349,6 +1512,7 @@
   if (backgroundExplicit) applyBackground(backgroundKey);
 
   showScreen('main');
+  logDiagnostics();
 
   if (!modelId) {
     log('No model parameter in the URL.', 'err');
