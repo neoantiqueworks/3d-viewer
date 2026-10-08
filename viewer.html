@@ -2,6 +2,10 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<!-- The Drive API key is restricted to HTTP referrers on this site, so the
+     Drive request must carry at least the origin. strict-origin-when-cross-origin
+     sends the origin to googleapis.com over https. Never use a policy that drops it. -->
+<meta name="referrer" content="strict-origin-when-cross-origin">
 <!-- user-scalable=no stops double-tap page zoom so all gestures reach the canvas.
      viewport-fit=cover lets the layout use the full screen on notched phones. -->
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
@@ -140,9 +144,12 @@
 
   #ui .group, #editUi .group { display: flex; align-items: center; gap: var(--group-gap); }
   #ui .group > *, #editUi .group > * { pointer-events: auto; }  /* tappable */
-  #ui .group-start,  #editUi .group-start  { justify-self: start; }
-  #ui .group-center, #editUi .group-center { justify-self: center; }
-  #ui .group-end,    #editUi .group-end    { justify-self: end; }
+  /* Explicit columns. Without them a hidden group (display: none drops it from
+     the grid) lets the next one auto-place into its column, which is how
+     Close ended up mid-bar on the error screen. */
+  #ui .group-start,  #editUi .group-start  { justify-self: start;  grid-column: 1; grid-row: 1; }
+  #ui .group-center, #editUi .group-center { justify-self: center; grid-column: 2; grid-row: 1; }
+  #ui .group-end,    #editUi .group-end    { justify-self: end;    grid-column: 3; grid-row: 1; }
 
   /* While loading there is nothing to apply a material to or to share, and on
      the error card only Close makes sense. Hiding the rest avoids buttons that
@@ -428,7 +435,7 @@
      and is the source the painter reads. -->
 <div id="error" class="overlay" hidden>
   <canvas id="errorCanvas" class="overlayCanvas" aria-hidden="true"></canvas>
-  <p class="srOnly" id="errorText">This model could not be loaded. Please check your connection and try again.</p>
+  <p class="srOnly" id="errorText">This model could not be loaded. Please try again.</p>
   <button id="retryBtn" class="overlayBtn" type="button" aria-label="Try again"></button>
 </div>
 
@@ -533,14 +540,15 @@
   // stale cached page can be told apart from a current one at a glance.
   // Must match version.json at the repo root, in the same commit. The
   // self-update check below compares the two.
-  const VIEWER_VERSION = '2026-10-08d';
+  const VIEWER_VERSION = '2026-10-08e';
 
   const CONFIG = {
 
     /* ---- Google Drive ---------------------------------------------------
-       Key secrecy is not a goal for this project; the key is restricted to
-       the Drive API in Google Cloud Console instead. */
-    apiKey: 'AIzaSyBtUl5GypgSDB7XryBgazxYIeHxN1fHu3w',
+       No API key lives in this file, or anywhere in the repository: the
+       repository is public. The key travels in the link as the k parameter
+       (see URL PARAMETERS) and is never shown in full, on screen or in the
+       log. */
     driveFilesUrl: 'https://www.googleapis.com/drive/v3/files/',
 
     /* ---- three.js ------------------------------------------------------- */
@@ -757,6 +765,7 @@
   // Returns the text node of the new line so progress can be rewritten in place.
   function log(text, level = 'info') {
     if (!DEBUG) return null;
+    text = redactKeys(text);
     if (level === 'err') console.error(text); else console.log(text);
     const panel = ensureLogPanel();
     const line = document.createElement('div');
@@ -773,6 +782,28 @@
     return msg;
   }
 
+  /* The API key must never appear in full on screen or in the console. Every
+     log line passes through here, which covers the URL in the diagnostics and
+     Google's error bodies, which echo the key back. Anything shaped like a
+     Google API key is masked as well as the link's own key, in case Google
+     ever returns it encoded differently. */
+  function maskKey(key) {
+    if (!key) return '(none)';
+    if (key.length <= 8) return '****';
+    return key.slice(0, 4) + '...' + key.slice(-4);
+  }
+  function redactKeys(text) {
+    let out = String(text);
+    if (typeof apiKey === 'string' && apiKey) {
+      out = out.split(apiKey).join(maskKey(apiKey));
+      const encoded = encodeURIComponent(apiKey);
+      if (encoded !== apiKey) out = out.split(encoded).join(maskKey(apiKey));
+    }
+    // Inline rather than a module constant, so log() is safe to call from
+    // anywhere above this point in the script.
+    return out.replace(/AIza[0-9A-Za-z_-]{35}/g, (match) => maskKey(match));
+  }
+
   function formatBytes(n) {
     if (n < 1024) return n + ' B';
     if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
@@ -785,6 +816,8 @@
   /* =========================================================================
      URL PARAMETERS
      model = Drive file ID (required)
+     k     = Google API key for the Drive request (required). It is in the link
+             rather than in this file because the repository is public.
      mat   = chrome | bronze | anthracite   (optional, default chrome)
      bg    = light | dark                   (optional, default light)
      ========================================================================= */
@@ -802,6 +835,9 @@
 
   const params = new URLSearchParams(location.search);
   const modelId = extractFileId(params.get('model'));
+  // var, not const: redactKeys() reads it from log(), which can run before
+  // this line, and a const would still be in its temporal dead zone then.
+  var apiKey = (params.get('k') || '').trim();
 
   const requestedMaterial = params.get('mat');
   let materialKey = MATERIAL_KEYS.includes(requestedMaterial)
@@ -1239,7 +1275,9 @@
 
     let response;
     try {
-      response = await fetch(url);
+      // Explicit, so no inherited policy can strip the origin the key's
+      // referrer restriction checks.
+      response = await fetch(url, { referrerPolicy: 'strict-origin-when-cross-origin' });
     } catch (err) {
       // No readable response at all: offline, DNS or CORS.
       log('Request failed: ' + err.name + ': ' + err.message, 'err');
@@ -1386,7 +1424,7 @@
      ========================================================================= */
   const MESSAGES = {
     noModel: 'No model in this link. Please use the link you were sent.',
-    failed: 'This model could not be loaded. Please check your connection and try again.'
+    failed: 'This model could not be loaded. Please try again.'
   };
 
   let loading = false;
@@ -1398,7 +1436,7 @@
     showLoading(true);
 
     try {
-      const bytes = await fetchDriveFile(modelId, CONFIG.apiKey);
+      const bytes = await fetchDriveFile(modelId, apiKey);
       checkGlbMagic(bytes);
       const gltf = await gltfLoader.parseAsync(bytes.buffer, '');
       showModel(gltf.scene);
@@ -2812,11 +2850,12 @@
   if (!modelId) {
     log('No model parameter in the URL.', 'err');
     showError(MESSAGES.noModel);
-  } else if (CONFIG.apiKey === 'PASTE_API_KEY_HERE') {
-    log('The API key constant in CONFIG has not been filled in.', 'err');
+  } else if (!apiKey) {
+    log('No k (API key) parameter in the URL.', 'err');
     showError(MESSAGES.failed);
   } else {
-    log('Model: ' + modelId + ', material: ' + materialKey + ', background: ' + backgroundKey);
+    log('Model: ' + modelId + ', key: ' + maskKey(apiKey) + ', material: ' + materialKey +
+      ', background: ' + backgroundKey);
     loadModel();
   }
 </script>

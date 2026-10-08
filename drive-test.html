@@ -2,6 +2,9 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<!-- The API key is restricted to HTTP referrers on this site, so the Drive
+     request must carry at least the origin. Never use a policy that drops it. -->
+<meta name="referrer" content="strict-origin-when-cross-origin">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Drive GLB Test</title>
 
@@ -240,6 +243,7 @@
   }
 
   function log(text, level = 'info') {
+    text = redactKeys(text);
     const line = document.createElement('div');
     const ts = document.createElement('span');
     ts.className = 'ts';
@@ -269,6 +273,17 @@
   function maskKey(key) {
     if (key.length <= 8) return '****';
     return key.slice(0, 4) + '...' + key.slice(-4);
+  }
+
+  // The full key never reaches the log. Google's error bodies echo the key
+  // back, so every line is passed through this: the typed key is masked, and
+  // so is anything else shaped like a Google API key.
+  function redactKeys(text) {
+    let out = String(text);
+    const input = document.getElementById('apiKey');
+    const key = input ? input.value.trim() : '';
+    if (key.length > 8) out = out.split(key).join(maskKey(key));
+    return out.replace(/AIza[0-9A-Za-z_-]{35}/g, (match) => maskKey(match));
   }
 
   // Error that has already been written to the log, so the caller does not
@@ -441,7 +456,8 @@
     let response;
     const t0 = performance.now();
     try {
-      response = await fetch(url);
+      // Explicit, so the origin the key's referrer restriction checks is sent.
+      response = await fetch(url, { referrerPolicy: 'strict-origin-when-cross-origin' });
     } catch (err) {
       log('Request failed: ' + err.name + ': ' + err.message, 'err');
       log('No HTTP response is readable. This is a network or CORS failure; the browser hides the reason from the page. ' +

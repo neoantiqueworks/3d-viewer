@@ -72,16 +72,43 @@
     check(stray.length === 0, 'stray text: ' + page + (stray.length ? ' -> ' + stray.join(' | ') : ''));
   });
 
-  /* ---- 3. Edit screen layout at phone widths ---------------------------- */
+  /* ---- 3. No API key in the repository, referrer always sent -------------
+     The repository is public and a committed key was suspended. This scans the
+     files a browser can fetch; tests/check-no-keys.py scans every tracked file.
+     The pattern is built at runtime so this file cannot match itself. */
+  var KEY_RE = new RegExp('AIza' + '[0-9A-Za-z_\-]{35}');
+  var SCANNED = PAGES.concat(['drive-test.html', 'README.md', 'version.json',
+    'tests/harness.html', 'tests/check-no-keys.py']);
+  for (var si = 0; si < SCANNED.length; si++) {
+    var text = sources[SCANNED[si]] || await getText(SCANNED[si]);
+    sources[SCANNED[si]] = text;
+    var hit = text.match(KEY_RE);
+    check(!hit, 'no API key in ' + SCANNED[si] + (hit ? ' -> ' + hit[0].slice(0, 4) + '...' + hit[0].slice(-4) : ''));
+  }
+  var NO_REF = 'no-' + 'referrer';
+  SCANNED.forEach(function (name) {
+    if (name.indexOf('tests/') === 0 || name === 'README.md') return;
+    check(sources[name].indexOf(NO_REF) < 0, 'no ' + NO_REF + ' policy in ' + name);
+  });
+  ['viewer.html', 'drive-test.html'].forEach(function (name) {
+    var doc = new DOMParser().parseFromString(sources[name], 'text/html');
+    var meta = doc.querySelector('meta[name="referrer"]');
+    check(!!meta && meta.content === 'strict-origin-when-cross-origin',
+      name + ' sets referrer policy strict-origin-when-cross-origin');
+    check(/fetch\(url, \{ referrerPolicy: 'strict-origin-when-cross-origin' \}\)/.test(sources[name]),
+      name + ' passes the referrer policy on the Drive fetch');
+  });
+
+  /* ---- 4. Edit screen layout at phone widths ---------------------------- */
   var EDIT_IDS = ['editCloseBtn', 'penBtn', 'undoBtn', 'clearBtn', 'penColorBtn', 'recordBtn', 'editShareBtn'];
   var HEIGHT = 780;
 
-  function loadFrame(width) {
+  function loadFrame(width, query) {
     return new Promise(function (resolve) {
       var frame = document.createElement('iframe');
       frame.width = width;
       frame.height = HEIGHT;
-      frame.src = '../viewer.html?t=' + Date.now();
+      frame.src = '../viewer.html?t=' + Date.now() + (query || '');
       document.getElementById('frames').appendChild(frame);
       var started = Date.now();
       (function poll() {
@@ -106,10 +133,23 @@
   for (var wi = 0; wi < WIDTHS.length; wi++) {
     var W = WIDTHS[wi];
     var tag = '@' + W + ': ';
-    var frame = await loadFrame(W);
+    var frame = await loadFrame(W, '&model=harnessNoKey');
     if (!frame) { check(false, tag + 'viewer did not become ready'); continue; }
     var win = frame.contentWindow;
     var doc = win.document;
+
+    // A link with a model but no k lands on the error screen. Close must sit
+    // top right there too, and the message is the agreed wording.
+    await nextFrames(win);
+    var errorShown = !doc.getElementById('error').hidden && doc.body.classList.contains('state-error');
+    check(errorShown, tag + 'missing k shows the error screen');
+    check(doc.getElementById('errorText').textContent.trim() === 'This model could not be loaded. Please try again.',
+      tag + 'error text is the agreed wording');
+    var closeRect = doc.getElementById('closeBtn').getBoundingClientRect();
+    check(closeRect.width > 0 && (closeRect.left + closeRect.right) / 2 > W * 0.75 &&
+      (closeRect.top + closeRect.bottom) / 2 < HEIGHT * 0.2,
+      tag + 'error screen close is top right (' + Math.round((closeRect.left + closeRect.right) / 2) + ',' +
+      Math.round((closeRect.top + closeRect.bottom) / 2) + ')');
 
     // Switch screens through the app's own showScreen, which also repaints
     // the controls. There is no model here, so no frozen still: layout is all
@@ -183,6 +223,60 @@
     var rowClash = EDIT_IDS.filter(function (id) { return id !== 'penColorBtn' && overlap(rowRect, r[id]); });
     check(rowClash.length === 0, tag + 'colour row covers no other control' + (rowClash.length ? ' -> ' + rowClash.join(', ') : ''));
   }
+
+  /* ---- 5. The key is masked in the debug log ----------------------------
+     A made-up key, built here so no key exists in this file. The Drive request
+     is real and fails, and Google's error body echoes the key back, so this
+     also covers masking inside response bodies. */
+  var fakeKey = 'AIza' + 'HarnessFakeKey0000000000000000000000'.slice(0, 35);
+  var dbg = await loadFrame(385, '&debug=1&model=harnessModelId&k=' + fakeKey);
+  if (!dbg) {
+    check(false, 'debug frame did not become ready');
+  } else {
+    var started = Date.now();
+    var logText = '';
+    while (Date.now() - started < 15000) {
+      var panel = dbg.contentWindow.document.getElementById('debugLog');
+      logText = panel ? panel.textContent : '';
+      if (/Response body|Request failed/.test(logText)) break;
+      await new Promise(function (r) { setTimeout(r, 200); });
+    }
+    check(/key: AIza\.\.\.0000/.test(logText), 'debug log shows the key masked');
+    check(logText.indexOf(fakeKey) < 0, 'debug log never shows the full key' +
+      (/Response body/.test(logText) ? ' (Google error body included)' : ' (no Drive response seen)'));
+    check(dbg.contentWindow.document.body.innerText.indexOf(fakeKey) < 0, 'page text never shows the full key');
+  }
+
+  /* ---- 6. Link builder puts k in the link and never shows it in full ---- */
+  var lb = await new Promise(function (resolve) {
+    var frame = document.createElement('iframe');
+    frame.width = 385; frame.height = HEIGHT;
+    frame.src = '../link-builder.html?t=' + Date.now();
+    frame.onload = function () { resolve(frame); };
+    document.getElementById('frames').appendChild(frame);
+  });
+  var lbWin = lb.contentWindow, lbDoc = lbWin.document;
+  try { lbWin.localStorage.removeItem('linkBuilder.apiKey'); } catch (e) {}
+  var opened = '';
+  lbWin.open = function (url) { opened = url; return null; };
+  var keyInput = lbDoc.getElementById('apiKey');
+  check(keyInput && keyInput.type === 'password', 'link builder key field is masked');
+  lbDoc.getElementById('source').value = 'https://drive.google.com/file/d/HarnessFileId0123456789/view';
+  lbDoc.getElementById('source').dispatchEvent(new lbWin.Event('input'));
+  keyInput.value = fakeKey;
+  keyInput.dispatchEvent(new lbWin.Event('input'));
+  lbDoc.getElementById('openBtn').click();
+  check(opened.indexOf('model=HarnessFileId0123456789') >= 0 && opened.indexOf('&k=' + fakeKey) >= 0,
+    'link builder link carries model and k');
+  check(lbDoc.body.innerText.indexOf(fakeKey) < 0 && lbDoc.getElementById('link').textContent.indexOf('k=AIza...') >= 0,
+    'link builder shows the link with the key masked');
+  var stored = null;
+  try { stored = lbWin.localStorage.getItem('linkBuilder.apiKey'); } catch (e) {}
+  check(stored === fakeKey, 'link builder keeps the key in localStorage');
+  lbDoc.getElementById('forgetKey').click();
+  try { stored = lbWin.localStorage.getItem('linkBuilder.apiKey'); } catch (e) {}
+  check(stored === null && keyInput.value === '' && lbDoc.getElementById('openBtn').disabled,
+    'link builder Forget removes the key');
 
   var verdict = failures ? 'FAIL (' + failures + ')' : 'PASS';
   document.title = verdict;

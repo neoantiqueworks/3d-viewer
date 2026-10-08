@@ -7,7 +7,7 @@ with three.js as static files only, hosted on GitHub Pages.
 | File | Purpose |
 | --- | --- |
 | `viewer.html` | The customer-facing viewer. The only viewer. |
-| `link-builder.html` | Internal tool: paste a Drive link, get the viewer link. |
+| `link-builder.html` | Internal tool: paste a Drive link, get the viewer link (with the API key in it). |
 | `drive-test.html` | Diagnostic page from Phase 1, kept for troubleshooting. |
 | `record-test.html` | Diagnostic page: what MediaRecorder and the share sheet actually do on a given phone. Groundwork for Phase 3. |
 | `version.json` | The current version string, nothing else. Every page checks it on startup and reloads once if it is behind. |
@@ -83,7 +83,7 @@ The customer taps a link and sees the model. There is nothing to fill in and
 nothing to set up:
 
 ```
-https://neoantiqueworks.github.io/3d-viewer/viewer.html?model=DRIVE_FILE_ID
+https://neoantiqueworks.github.io/3d-viewer/viewer.html?model=DRIVE_FILE_ID&k=API_KEY
 ```
 
 ### URL parameters
@@ -91,6 +91,7 @@ https://neoantiqueworks.github.io/3d-viewer/viewer.html?model=DRIVE_FILE_ID
 | Parameter | Values | Default | Meaning |
 | --- | --- | --- | --- |
 | `model` | Drive file ID | (required) | Which GLB to load. A full Drive share link is also accepted. |
+| `k` | Google API key | (required) | The key for the Drive request. Missing means the friendly error. See "The API key" below. |
 | `mat` | `chrome`, `bronze`, `anthracite` | `chrome` | Material shown on arrival. |
 | `bg` | `light`, `dark` | follows the material | Background shown on arrival. Overrides the material's own default, for the initial state only. |
 
@@ -187,7 +188,7 @@ browser UI tint follow the same two values through the `--bg-top` and
 `--bg-bottom` CSS variables.
 
 Every tunable value lives in the single `CONFIG` block at the top of the
-module script in `viewer.html`: the API key, both background colors, all
+module script in `viewer.html`: both background colors, all
 material values, the share image format and the camera framing.
 
 ### Debug output
@@ -287,15 +288,30 @@ centered button overlap the material buttons on a narrow phone.
 
 ### The API key
 
-The key is a constant in `CONFIG` in `viewer.html`. Key secrecy is not a goal
-for this project; restrict the key to the Google Drive API in Google Cloud
-Console instead.
+**No API key may exist in any file of this repository, ever.** The repository
+is public; a key committed to it was found and suspended by Google. The
+harness fails if any file it scans contains a string shaped like a Google API
+key, and `tests/check-no-keys.py` scans every tracked file:
 
-Because the key is committed, GitHub secret scanning will reject the first
-push that contains it. The rejection message prints an unblock URL like
-`https://github.com/neoantiqueworks/3d-viewer/security/secret-scanning/unblock-secret/<id>`.
-Open it while signed in as the repository owner, choose to allow the secret,
-then push again.
+```
+python tests/check-no-keys.py
+```
+
+The key travels in the link as the `k` parameter instead. The self-update
+reload keeps every parameter, `k` included.
+
+The key has an HTTP referrer restriction for `https://neoantiqueworks.github.io/*`,
+so the Drive request must carry a referrer. `viewer.html` and `drive-test.html`
+set `<meta name="referrer" content="strict-origin-when-cross-origin">` and pass
+the same policy explicitly on the Drive `fetch`, which sends at least the origin
+over https. Never use a policy that drops the referrer. The restriction means
+real models cannot be loaded from `file://` or `localhost`; that is accepted.
+
+The full key is never shown on screen or in the log. With `debug=1` every log
+line is passed through a mask (first 4 and last 4 characters), which covers the
+page URL in the diagnostics and Google's error bodies, which echo the key back.
+The address bar still shows the link as opened; that is the browser's, not
+the page's.
 
 ## Phase 2: Link builder (`link-builder.html`)
 
@@ -309,7 +325,10 @@ default and adds no `bg` parameter, which is what lets each material's own
 default background apply. Light and Dark force the starting background
 instead.
 
-This page makes no network requests and contains no API key: it only parses a
+The API key goes in step 1. It is stored in this browser's localStorage only,
+never in the repository, shown masked (a password field), and **Forget**
+removes it. The link on screen shows the key masked; **Copy** and **Open to
+test** use the full link. The page makes no Drive request: it only parses a
 string and builds a URL. `VIEWER_URL` at the top of its script is the only
 thing to change if the GitHub Pages address ever changes.
 
@@ -528,12 +547,14 @@ from jsDelivr, so an internet connection is required.
 3. Google Drive: right-click the GLB > Share > General access:
    **Anyone with the link**. Copy the link (or just the file ID).
 
-Optional: the key can be restricted to the Drive API and/or to HTTP referrers
-under Credentials; a referrer restriction blocks `file://` use.
+The project's key is restricted to HTTP referrers on
+`https://neoantiqueworks.github.io/*`, so run this page from GitHub Pages; from
+`file://` Google rejects the key. The page contains no key: type it in. The log
+masks it, including inside Google's error bodies.
 
 ### Running the test
 
-1. Open `drive-test.html` (double-click it, or serve it on GitHub Pages).
+1. Open `drive-test.html` on GitHub Pages.
 2. Paste the API key and the file ID or the full share link.
 3. Press **Load** (or Enter).
 

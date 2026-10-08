@@ -13,8 +13,11 @@
   Paste a Google Drive share link (or a bare file ID), pick the starting
   material and background, and copy the finished viewer link.
 
-  Everything happens in the browser: this page makes no network requests and
-  needs no API key, because it only parses a string and builds a URL.
+  Everything happens in the browser: this page makes no Drive request, it
+  only parses a string and builds a URL. The Drive API key goes into the link
+  as the k parameter. It is kept in this browser's localStorage only, never in
+  the repository, and is never shown in full: the input is a password field
+  and the link on screen is masked. Copy and Open use the full link.
   ===========================================================================
 -->
 <style>
@@ -54,7 +57,7 @@
     margin: 0 0 10px;
   }
 
-  textarea, input[type="text"] {
+  textarea, input[type="text"], input[type="password"] {
     display: block;
     width: 100%;
     box-sizing: border-box;
@@ -84,6 +87,17 @@
     background: var(--accent);
     color: #fff;
     font-weight: 600;
+  }
+  .keyRow { display: flex; gap: 8px; align-items: stretch; }
+  .keyRow input { flex: 1; min-width: 0; }
+  .keyRow button {
+    font: inherit;
+    padding: 0 14px;
+    border-radius: 7px;
+    border: 1px solid #c6cad0;
+    background: #fff;
+    color: #23262a;
+    cursor: pointer;
   }
   .hint { font-size: 12.5px; color: #6b7075; margin: 8px 0 0; }
 
@@ -128,9 +142,23 @@
 
   <h1>Viewer Link Builder</h1>
 
-  <!-- Step 1: the Drive file -->
+  <!-- Step 1: the API key. Stored in this browser only; never shown in full. -->
   <section>
-    <h2>1. Drive share link or file ID</h2>
+    <h2>1. Drive API key</h2>
+    <div class="keyRow">
+      <input id="apiKey" type="password" autocomplete="off" spellcheck="false" autocapitalize="off"
+        aria-label="Drive API key">
+      <button id="forgetKey" type="button">Forget</button>
+    </div>
+    <p class="hint" id="keyHint">
+      Saved in this browser only. It goes into the link, so share links only
+      with the people meant to open them.
+    </p>
+  </section>
+
+  <!-- Step 2: the Drive file -->
+  <section>
+    <h2>2. Drive share link or file ID</h2>
     <textarea id="source" autocomplete="off" spellcheck="false" autocapitalize="off"
       placeholder="https://drive.google.com/file/d/FILE_ID/view?usp=sharing"></textarea>
     <p class="hint">
@@ -139,10 +167,10 @@
     </p>
   </section>
 
-  <!-- Step 2: starting material. A parameter is only added when it is not
+  <!-- Step 3: starting material. A parameter is only added when it is not
        the viewer's own default. -->
   <section>
-    <h2>2. Starting material</h2>
+    <h2>3. Starting material</h2>
     <div class="options" id="materialOptions">
       <button type="button" data-value="chrome"     aria-pressed="true">Chrome (default)</button>
       <button type="button" data-value="bronze"     aria-pressed="false">Aged bronze</button>
@@ -150,10 +178,10 @@
     </div>
   </section>
 
-  <!-- Step 3: starting background. "Auto" is the default and adds no bg
+  <!-- Step 4: starting background. "Auto" is the default and adds no bg
        parameter, which lets each material's own default background apply. -->
   <section>
-    <h2>3. Starting background</h2>
+    <h2>4. Starting background</h2>
     <div class="options" id="backgroundOptions">
       <button type="button" data-value="auto"  aria-pressed="true">Auto (follows material)</button>
       <button type="button" data-value="light" aria-pressed="false">Light</button>
@@ -167,9 +195,9 @@
     </p>
   </section>
 
-  <!-- Step 4: the finished link -->
+  <!-- Step 5: the finished link -->
   <section id="result">
-    <h2>4. Viewer link</h2>
+    <h2>5. Viewer link</h2>
     <code id="link">Paste a Drive link above.</code>
     <div class="actions">
       <button id="copyBtn" class="primary" type="button" disabled>Copy</button>
@@ -189,7 +217,7 @@
      ======================================================================= */
 
   // Must match version.json at the repo root, in the same commit.
-  var PAGE_VERSION = '2026-10-08d';
+  var PAGE_VERSION = '2026-10-08e';
 
   // Where viewer.html is published. Change this if the repository or the
   // GitHub Pages address ever changes.
@@ -286,6 +314,7 @@
      STATE AND ELEMENTS
      ======================================================================= */
   var sourceEl = document.getElementById('source');
+  var keyEl = document.getElementById('apiKey');
   var linkEl = document.getElementById('link');
   var copyBtn = document.getElementById('copyBtn');
   var openBtn = document.getElementById('openBtn');
@@ -297,6 +326,22 @@
   };
 
   var currentLink = '';
+
+  /* =======================================================================
+     API KEY
+     localStorage only. Storage can throw (private mode, blocked site data),
+     so every access is guarded and the page works without it.
+     ======================================================================= */
+  var STORE_KEY = 'linkBuilder.apiKey';
+  function storeGet() { try { return localStorage.getItem(STORE_KEY) || ''; } catch (e) { return ''; } }
+  function storeSet(v) { try { localStorage.setItem(STORE_KEY, v); } catch (e) { /* ignore */ } }
+  function storeDel() { try { localStorage.removeItem(STORE_KEY); } catch (e) { /* ignore */ } }
+
+  // First 4 and last 4 characters, the same mask the viewer's log uses.
+  function maskKey(key) {
+    if (key.length <= 8) return '****';
+    return key.slice(0, 4) + '...' + key.slice(-4);
+  }
 
   /* =======================================================================
      FILE ID EXTRACTION
@@ -344,12 +389,25 @@
       return;
     }
 
+    var key = keyEl.value.trim();
+    if (!key) {
+      currentLink = '';
+      linkEl.textContent = 'Enter the Drive API key in step 1.';
+      copyBtn.disabled = true;
+      openBtn.disabled = true;
+      setStatus('');
+      return;
+    }
+
     var params = ['model=' + encodeURIComponent(id)];
     if (selected.mat !== DEFAULT_MATERIAL) params.push('mat=' + selected.mat);
     if (selected.bg !== DEFAULT_BACKGROUND) params.push('bg=' + selected.bg);
 
-    currentLink = VIEWER_URL + '?' + params.join('&');
-    linkEl.textContent = currentLink;
+    // The full link is what Copy and Open use. The one on screen has the key
+    // masked, so the key is never displayed in full.
+    var base = VIEWER_URL + '?' + params.join('&');
+    currentLink = base + '&k=' + encodeURIComponent(key);
+    linkEl.textContent = base + '&k=' + maskKey(key);
     copyBtn.disabled = false;
     openBtn.disabled = false;
     setStatus('');
@@ -379,6 +437,20 @@
 
   sourceEl.addEventListener('input', rebuild);
 
+  keyEl.value = storeGet();
+  keyEl.addEventListener('input', function () {
+    var key = keyEl.value.trim();
+    if (key) storeSet(key); else storeDel();
+    rebuild();
+  });
+
+  document.getElementById('forgetKey').addEventListener('click', function () {
+    storeDel();
+    keyEl.value = '';
+    rebuild();
+    setStatus('API key removed from this browser.', 'ok');
+  });
+
   /* =======================================================================
      COPY AND OPEN
      navigator.clipboard needs a secure context, so a selection based
@@ -403,7 +475,8 @@
     if (fallbackCopy(currentLink)) {
       setStatus('Link copied.', 'ok');
     } else {
-      setStatus('Could not copy. Select the link above and copy it by hand.', 'err');
+      // The link on screen is masked, so copying it by hand would not work.
+      setStatus('Could not copy in this browser. Use Open to test, then copy the address from there.', 'err');
     }
   }
 
