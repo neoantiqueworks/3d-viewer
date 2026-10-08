@@ -11,6 +11,7 @@ with three.js as static files only, hosted on GitHub Pages.
 | `drive-test.html` | Diagnostic page from Phase 1, kept for troubleshooting. |
 | `record-test.html` | Diagnostic page: what MediaRecorder and the share sheet actually do on a given phone. Groundwork for Phase 3. |
 | `version.json` | The current version string, nothing else. Every page checks it on startup and reloads once if it is behind. |
+| `tests/harness.html` | Regression harness. Serve the repo root (`python -m http.server`) and open it: checks the versions agree, that no body markup renders stray text (a broken comment), and the edit screen layout at 320, 385 and 480 px. |
 
 ## Deploying: the self-update check
 

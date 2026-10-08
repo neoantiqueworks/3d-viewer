@@ -116,7 +116,10 @@
      grows and the centre shifts slightly instead of anything colliding. The
      old approach positioned each cluster independently, so a wide start group
      and a centred button could and did overlap on a narrow phone. */
-  #ui .bar {
+  /* The bar rules are shared by both screens. They were once scoped to #ui
+     alone, which left the edit screen's bars unstyled and stacked every edit
+     control in one column at the top left. */
+  #ui .bar, #editUi .bar {
     position: fixed;
     left: 0;
     right: 0;
@@ -126,20 +129,20 @@
     gap: var(--gap);
     box-sizing: border-box;
   }
-  #ui .bar-top {
+  #ui .bar-top, #editUi .bar-top {
     top: 0;
     padding: var(--edge-top) var(--edge-right) 0 var(--edge-left);
   }
-  #ui .bar-bottom {
+  #ui .bar-bottom, #editUi .bar-bottom {
     bottom: 0;
     padding: 0 var(--edge-right) var(--edge-bottom) var(--edge-left);
   }
 
-  #ui .group { display: flex; align-items: center; gap: var(--group-gap); }
-  #ui .group > * { pointer-events: auto; }           /* buttons are tappable */
-  #ui .group-start  { justify-self: start; }
-  #ui .group-center { justify-self: center; }
-  #ui .group-end    { justify-self: end; }
+  #ui .group, #editUi .group { display: flex; align-items: center; gap: var(--group-gap); }
+  #ui .group > *, #editUi .group > * { pointer-events: auto; }  /* tappable */
+  #ui .group-start,  #editUi .group-start  { justify-self: start; }
+  #ui .group-center, #editUi .group-center { justify-self: center; }
+  #ui .group-end,    #editUi .group-end    { justify-self: end; }
 
   /* While loading there is nothing to apply a material to or to share, and on
      the error card only Close makes sense. Hiding the rest avoids buttons that
@@ -273,7 +276,6 @@
     pointer-events: none;
     z-index: 22;
   }
-  #editUi .group > * { pointer-events: auto; }
 
   /* The left column runs bottom to top: pen, undo, clear, colour. Children are
      in that DOM order and column-reverse puts the first one at the bottom,
@@ -283,6 +285,11 @@
     align-items: flex-start;
   }
   #editUi .bar-bottom { align-items: end; }
+
+  /* The record button is taller than the others by the timer strip painted
+     above its disc, so the running time sits inside the button's own box and
+     can never overlap a neighbour or fall off the bottom edge. */
+  #editUi .recordBtn { height: calc(var(--btn) + 16px); }
 
   /* The six pen colours, revealed by the colour button. Positioned from the
      colour button's own rect at runtime rather than from a calc, so adding a
@@ -356,9 +363,9 @@
 -->
 <div id="ui">
 
-     Plain buttons wrapping a canvas. The canvas is the entire visual,
-     because a forced dark mode rewrites CSS colours but cannot touch
-     canvas pixels.
+  <!-- Plain buttons wrapping a canvas. The canvas is the entire visual,
+       because a forced dark mode rewrites CSS colours but cannot touch
+       canvas pixels. -->
 
   <!-- ===== Top bar: background presets at the left, close at the right ===== -->
   <div class="bar bar-top">
@@ -526,7 +533,7 @@
   // stale cached page can be told apart from a current one at a glance.
   // Must match version.json at the repo root, in the same commit. The
   // self-update check below compares the two.
-  const VIEWER_VERSION = '2026-10-08b';
+  const VIEWER_VERSION = '2026-10-08d';
 
   const CONFIG = {
 
@@ -1571,9 +1578,20 @@
   }
 
   // Reads one of the clamp() sized layout tokens as a number of CSS pixels.
+  // getPropertyValue returns a custom property as written, so parsing it
+  // directly turns clamp(), calc() and env() into NaN and every caller got the
+  // fallback. A probe lets the browser resolve the length instead.
+  let tokenProbe = null;
   function tokenPx(name, fallback) {
-    const raw = getComputedStyle(document.documentElement).getPropertyValue(name);
-    const value = parseFloat(raw);
+    if (!tokenProbe) {
+      tokenProbe = document.createElement('div');
+      tokenProbe.setAttribute('aria-hidden', 'true');
+      tokenProbe.style.cssText =
+        'position:fixed;left:0;top:0;height:0;visibility:hidden;pointer-events:none';
+      document.body.appendChild(tokenProbe);
+    }
+    tokenProbe.style.width = 'var(' + name + ')';
+    const value = tokenProbe.getBoundingClientRect().width;
     return isFinite(value) && value > 0 ? value : fallback;
   }
 
@@ -1764,16 +1782,19 @@
   }
 
   /* The record button. A brand disc with a microphone while idle, a red disc
-     with a stop square while recording, and the elapsed time underneath so the
-     customer can see a recording is running. A disabled state is drawn flat and
+     with a stop square while recording, and the elapsed time above it so the
+     customer can see a recording is running. The timer strip is part of the
+     button's own box (see #editUi .recordBtn), so it cannot overlap anything. A disabled state is drawn flat and
      grey for when the microphone or the recorder is unavailable. */
   function paintRecordButton(host, state, seconds) {
     const canvasEl = host.querySelector('canvas');
     if (!canvasEl) return;
     const size = tokenPx('--btn', 48);
-    const ctx = prepareCanvas(canvasEl, size, size + 16);
+    const strip = 16;                                // timer strip above the disc
+    const ctx = prepareCanvas(canvasEl, size, size + strip);
     const centre = size / 2;
     const radius = centre - 2;
+    const cy = strip + centre;                       // disc centre
 
     const recording = state === 'recording';
     const disabled = state === 'disabled';
@@ -1783,7 +1804,7 @@
     ctx.shadowBlur = 6;
     ctx.shadowOffsetY = 2;
     ctx.beginPath();
-    ctx.arc(centre, centre, radius, 0, Math.PI * 2);
+    ctx.arc(centre, cy, radius, 0, Math.PI * 2);
     ctx.fillStyle = disabled ? 'rgba(128, 128, 128, 0.55)'
       : recording ? CONFIG.edit.recordingDisc
       : CONFIG.ui.brandColor;
@@ -1791,20 +1812,20 @@
     ctx.restore();
 
     ctx.beginPath();
-    ctx.arc(centre, centre, radius, 0, Math.PI * 2);
+    ctx.arc(centre, cy, radius, 0, Math.PI * 2);
     ctx.lineWidth = 1;
     ctx.strokeStyle = 'rgba(0, 0, 0, 0.30)';
     ctx.stroke();
 
-    drawGlyph(ctx, recording ? 'stop' : 'mic', centre, centre,
+    drawGlyph(ctx, recording ? 'stop' : 'mic', centre, cy,
       size * CONFIG.ui.iconScale,
       disabled ? 'rgba(255, 255, 255, 0.65)' : CONFIG.ui.iconColor);
 
     // A slash over the microphone says "unavailable" without any text.
     if (disabled) {
       ctx.beginPath();
-      ctx.moveTo(centre - radius * 0.5, centre + radius * 0.5);
-      ctx.lineTo(centre + radius * 0.5, centre - radius * 0.5);
+      ctx.moveTo(centre - radius * 0.5, cy + radius * 0.5);
+      ctx.lineTo(centre + radius * 0.5, cy - radius * 0.5);
       ctx.lineWidth = 2.5;
       ctx.strokeStyle = '#ffffff';
       ctx.stroke();
@@ -1817,8 +1838,8 @@
       ctx.fillStyle = CONFIG.edit.recordingDisc;
       ctx.font = '700 12px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
       ctx.textAlign = 'center';
-      ctx.textBaseline = 'top';
-      ctx.fillText(label, centre, size + 1);
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, centre, strip / 2);
     }
   }
 
@@ -2168,14 +2189,33 @@
   }
 
   /* Placed from the colour button's own rect, so adding another tool to the
-     column cannot put the row in the wrong place. */
+     column cannot put the row in the wrong place. The row opens to the right
+     of the button, level with it. Where that would run past the right edge
+     (six swatches next to the column do not fit on a 320 px phone) it opens
+     directly above the button instead. Either way it is clamped inside the
+     same safe-area edges the bars use, so it is always fully on screen. */
   function positionPenColorRow() {
     if (penColorRow.hidden) return;
     const anchor = document.getElementById('penColorBtn').getBoundingClientRect();
-    penColorRow.style.bottom = (window.innerHeight - anchor.top + 10) + 'px';
+    const gap = tokenPx('--group-gap', 8);
+    const minLeft = tokenPx('--edge-left', 8);
+    const maxRight = window.innerWidth - tokenPx('--edge-right', 8);
+    const minTop = tokenPx('--edge-top', 8);
+    const maxBottom = window.innerHeight - tokenPx('--edge-bottom', 8);
     const width = penColorRow.offsetWidth;
-    const maxLeft = Math.max(8, window.innerWidth - width - 8);
-    penColorRow.style.left = Math.min(anchor.left, maxLeft) + 'px';
+    const height = penColorRow.offsetHeight;
+
+    let left = anchor.right + gap;
+    let top = anchor.top + (anchor.height - height) / 2;
+    if (left + width > maxRight) {
+      left = anchor.left;
+      top = anchor.top - gap - height;
+    }
+    left = Math.max(minLeft, Math.min(left, maxRight - width));
+    top = Math.max(minTop, Math.min(top, maxBottom - height));
+    penColorRow.style.bottom = '';
+    penColorRow.style.left = left + 'px';
+    penColorRow.style.top = top + 'px';
   }
 
   function repaintPenColorRow() {
@@ -2608,6 +2648,8 @@
      STARTUP
      ========================================================================= */
   window.__viewerReady = true;   // tells the watchdog three.js arrived
+  // Lets tests/harness.html switch screens exactly as the app does.
+  window.__viewerShowScreen = showScreen;
 
   /* Everything needed to tell apart the ways this page can look wrong on a
      device with no reachable console. Only runs with the log panel on. */

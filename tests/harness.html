@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Viewer harness</title>
+<!-- Regression harness. Serve the repo root over http and open
+     /tests/harness.html, or run it headless:
+       python -m http.server 8765
+       then open http://localhost:8765/tests/harness.html
+     The verdict is in <title> and in #result: PASS or FAIL, then one line per
+     check. Add ?report=<url> to also POST it there, which is how a headless
+     run reads it back (virtual time stalls the iframes, so run in real time). -->
+<style>
+  body { font: 13px/1.45 Menlo, Consolas, monospace; margin: 12px; background: #fff; color: #111; }
+  .pass { color: #176b2c; }
+  .fail { color: #b00020; font-weight: 700; }
+  iframe { border: 1px solid #999; margin: 4px; vertical-align: top; }
+</style>
+</head>
+<body>
+<pre id="result">running</pre>
+<div id="frames"></div>
+
+<script>
+(async function () {
+  var lines = [];
+  var failures = 0;
+  function check(ok, label) {
+    if (!ok) failures++;
+    lines.push((ok ? 'PASS ' : 'FAIL ') + label);
+  }
+
+  var PAGES = ['viewer.html', 'link-builder.html', 'record-test.html'];
+  function getText(path) {
+    return fetch('../' + path + '?t=' + Date.now(), { cache: 'no-store' })
+      .then(function (r) { return r.text(); });
+  }
+
+  /* ---- 1. Versions agree ------------------------------------------------ */
+  var served = JSON.parse(await getText('version.json'));
+  var sources = {};
+  for (var i = 0; i < PAGES.length; i++) sources[PAGES[i]] = await getText(PAGES[i]);
+  [['viewer.html', /VIEWER_VERSION = '([^']+)'/],
+   ['link-builder.html', /PAGE_VERSION = '([^']+)'/],
+   ['record-test.html', /PAGE_VERSION = '([^']+)'/]].forEach(function (pair) {
+    var m = sources[pair[0]].match(pair[1]);
+    check(m && m[1] === served, 'version: ' + pair[0] + ' = ' + (m && m[1]) + ', version.json = ' + served);
+  });
+
+  /* ---- 2. No stray text in the body markup -------------------------------
+     A comment that lost its <!-- or --> becomes a text node and renders. Every
+     non-whitespace text node in the body must sit inside an element that is
+     meant to hold text. Plain containers (body, div, main, section) are not. */
+  var TEXT_HOLDERS = ['H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'P', 'BUTTON', 'CODE',
+    'LABEL', 'A', 'LI', 'SPAN', 'STRONG', 'EM', 'B', 'I', 'SMALL', 'PRE',
+    'OPTION', 'TEXTAREA', 'TD', 'TH', 'SUMMARY', 'LEGEND', 'DT', 'DD',
+    'SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'TITLE'];
+  PAGES.forEach(function (page) {
+    var doc = new DOMParser().parseFromString(sources[page], 'text/html');
+    var walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+    var stray = [];
+    for (var node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!node.nodeValue.trim()) continue;
+      var held = false;
+      for (var el = node.parentElement; el && el !== doc.body.parentElement; el = el.parentElement) {
+        if (TEXT_HOLDERS.indexOf(el.tagName) >= 0) { held = true; break; }
+      }
+      if (!held) stray.push(node.parentElement.tagName + (node.parentElement.id ? '#' + node.parentElement.id : '') +
+        ': "' + node.nodeValue.trim().slice(0, 50) + '"');
+    }
+    check(stray.length === 0, 'stray text: ' + page + (stray.length ? ' -> ' + stray.join(' | ') : ''));
+  });
+
+  /* ---- 3. Edit screen layout at phone widths ---------------------------- */
+  var EDIT_IDS = ['editCloseBtn', 'penBtn', 'undoBtn', 'clearBtn', 'penColorBtn', 'recordBtn', 'editShareBtn'];
+  var HEIGHT = 780;
+
+  function loadFrame(width) {
+    return new Promise(function (resolve) {
+      var frame = document.createElement('iframe');
+      frame.width = width;
+      frame.height = HEIGHT;
+      frame.src = '../viewer.html?t=' + Date.now();
+      document.getElementById('frames').appendChild(frame);
+      var started = Date.now();
+      (function poll() {
+        var win = frame.contentWindow;
+        if (win && win.__viewerReady && win.document.readyState === 'complete') return resolve(frame);
+        if (Date.now() - started > 20000) return resolve(null);
+        setTimeout(poll, 100);
+      })();
+    });
+  }
+  function nextFrames(win) {
+    return new Promise(function (r) { win.requestAnimationFrame(function () { win.requestAnimationFrame(r); }); });
+  }
+  function overlap(a, b) {
+    return a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5;
+  }
+  function onScreen(r, w, h) {
+    return r.left >= 0 && r.top >= 0 && r.right <= w + 0.5 && r.bottom <= h + 0.5 && r.width > 0 && r.height > 0;
+  }
+
+  var WIDTHS = [320, 385, 480];
+  for (var wi = 0; wi < WIDTHS.length; wi++) {
+    var W = WIDTHS[wi];
+    var tag = '@' + W + ': ';
+    var frame = await loadFrame(W);
+    if (!frame) { check(false, tag + 'viewer did not become ready'); continue; }
+    var win = frame.contentWindow;
+    var doc = win.document;
+
+    // Switch screens through the app's own showScreen, which also repaints
+    // the controls. There is no model here, so no frozen still: layout is all
+    // this part checks.
+    doc.getElementById('error').hidden = true;
+    doc.getElementById('loading').hidden = true;
+    win.__viewerShowScreen('edit');
+    await nextFrames(win);
+
+    // Every edit control sits inside a positioned cluster: a flex .group whose
+    // .bar is position: fixed.
+    EDIT_IDS.forEach(function (id) {
+      var btn = doc.getElementById(id);
+      var group = btn && btn.closest('.group');
+      var bar = group && group.closest('.bar');
+      var ok = !!(group && bar &&
+        win.getComputedStyle(group).display === 'flex' &&
+        win.getComputedStyle(bar).position === 'fixed' &&
+        win.getComputedStyle(bar).display === 'grid');
+      check(ok, tag + id + ' is inside a positioned cluster');
+    });
+
+    var r = {};
+    EDIT_IDS.forEach(function (id) { r[id] = doc.getElementById(id).getBoundingClientRect(); });
+    function cx(x) { return (x.left + x.right) / 2; }
+    function cy(x) { return (x.top + x.bottom) / 2; }
+
+    check(cx(r.editCloseBtn) > W * 0.75 && cy(r.editCloseBtn) < HEIGHT * 0.2,
+      tag + 'close is top right (' + Math.round(cx(r.editCloseBtn)) + ',' + Math.round(cy(r.editCloseBtn)) + ')');
+    check(Math.abs(cx(r.recordBtn) - W / 2) < W * 0.08 && cy(r.recordBtn) > HEIGHT * 0.8,
+      tag + 'record is bottom center (' + Math.round(cx(r.recordBtn)) + ',' + Math.round(cy(r.recordBtn)) + ')');
+    check(cx(r.editShareBtn) > W * 0.75 && cy(r.editShareBtn) > HEIGHT * 0.8,
+      tag + 'share is bottom right (' + Math.round(cx(r.editShareBtn)) + ',' + Math.round(cy(r.editShareBtn)) + ')');
+
+    var column = ['penBtn', 'undoBtn', 'clearBtn', 'penColorBtn'];
+    var columnOk = column.every(function (id, k) {
+      var x = r[id];
+      return cx(x) < W * 0.25 && (k === 0 ? x.bottom > HEIGHT * 0.9 : x.bottom <= r[column[k - 1]].top + 0.5);
+    });
+    check(columnOk, tag + 'tool column bottom left, bottom up: pen, undo, clear, colour');
+
+    var allOnScreen = EDIT_IDS.every(function (id) { return onScreen(r[id], W, HEIGHT); });
+    check(allOnScreen, tag + 'every edit control is fully on screen');
+    var clash = [];
+    for (var a = 0; a < EDIT_IDS.length; a++)
+      for (var b = a + 1; b < EDIT_IDS.length; b++)
+        if (overlap(r[EDIT_IDS[a]], r[EDIT_IDS[b]])) clash.push(EDIT_IDS[a] + '/' + EDIT_IDS[b]);
+    check(clash.length === 0, tag + 'no edit controls overlap' + (clash.length ? ' -> ' + clash.join(', ') : ''));
+
+    // The record button's box includes its timer strip, so its painted canvas
+    // must not spill outside the button.
+    var recCanvas = doc.querySelector('#recordBtn > canvas').getBoundingClientRect();
+    check(recCanvas.bottom <= r.recordBtn.bottom + 0.5 && recCanvas.top >= r.recordBtn.top - 0.5,
+      tag + 'record timer stays inside the record button');
+
+    // Buttons scale with the viewport and match the main screen's size.
+    var btnToken = parseFloat(win.getComputedStyle(doc.getElementById('editShareBtn')).width);
+    var mainShare = parseFloat(win.getComputedStyle(doc.getElementById('shareBtn')).width);
+    check(btnToken === mainShare, tag + 'edit buttons use the main screen size (' + btnToken + ' px)');
+
+    // The colour row opens next to the colour button and stays on screen.
+    doc.getElementById('penColorBtn').click();
+    await nextFrames(win);
+    var row = doc.getElementById('penColorRow');
+    var rowRect = row.getBoundingClientRect();
+    var anchor = doc.getElementById('penColorBtn').getBoundingClientRect();
+    check(!row.hidden && onScreen(rowRect, W, HEIGHT), tag + 'colour row fully on screen');
+    var adjacent = (Math.abs(rowRect.left - anchor.right) < 24 && rowRect.top < anchor.bottom && rowRect.bottom > anchor.top) ||
+                   (Math.abs(rowRect.bottom - anchor.top) < 24 && rowRect.left < anchor.right);
+    check(adjacent, tag + 'colour row opens next to the colour button');
+    var rowClash = EDIT_IDS.filter(function (id) { return id !== 'penColorBtn' && overlap(rowRect, r[id]); });
+    check(rowClash.length === 0, tag + 'colour row covers no other control' + (rowClash.length ? ' -> ' + rowClash.join(', ') : ''));
+  }
+
+  var verdict = failures ? 'FAIL (' + failures + ')' : 'PASS';
+  document.title = verdict;
+  var out = document.getElementById('result');
+  out.textContent = verdict + '\n' + lines.join('\n');
+  out.className = failures ? 'fail' : 'pass';
+  report(out.textContent);
+})().catch(function (err) {
+  document.title = 'FAIL (error)';
+  document.getElementById('result').textContent = 'FAIL harness error: ' + err;
+  report('FAIL harness error: ' + err);
+});
+
+// With ?report=<url> the verdict is also POSTed there, for headless runs.
+function report(text) {
+  var target = new URLSearchParams(location.search).get('report');
+  if (target) fetch(target, { method: 'POST', body: text }).catch(function () {});
+}
+</script>
+</body>
+</html>
