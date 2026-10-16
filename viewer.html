@@ -132,7 +132,12 @@
         // one of its imports cannot be fetched.
         var tag = target.tagName.toLowerCase();
         var src = target.src || target.href || '(inline)';
-        if (tag === 'script') {
+        if (tag === 'script' && target.type === 'module' && importMap !== 'true') {
+          // Without native import maps the browser's own run of the module
+          // always fails on the bare 'three' import; es-module-shims then
+          // runs it instead (see ES MODULE SHIMS). Expected, so not an error.
+          write('native module run failed (no native import maps); es-module-shims runs it instead');
+        } else if (tag === 'script') {
           write('script load error: ' + src + ' (type ' + (target.type || 'classic') + ')', 'err');
           // The browser does not say which import failed; fetch each import
           // map entry once and report its status.
@@ -550,6 +555,90 @@
 
 <!--
   ===========================================================================
+  ES MODULE SHIMS (old Safari support)
+  Import maps arrived in Safari 16.4. Older Safari (iPadOS / iOS 15 and
+  16.0-16.3) cannot resolve the bare 'three' imports, so the module never
+  starts. es-module-shims (pinned, integrity checked) polyfills import maps
+  there and stays dormant wherever import maps are native.
+
+  three.js r186 also uses static class blocks (static { }), which arrived in
+  the same Safari 16.4. They are all in three.core.js and all of one shape:
+    static { /* doc */ Vector2.prototype.isVector2 = true; }
+  On a browser without static blocks, the source hook below rewrites each one
+  into an equivalent static field before the module is evaluated:
+    static __staticBlock0 = void (Vector2.prototype.isVector2 = true);
+  The hook is installed ONLY on such browsers. A modern browser gets no hook,
+  so es-module-shims never touches its modules. Where the hook is installed,
+  the browser's own run of the module always fails first (three.core.js
+  cannot parse there), so the module never runs twice.
+
+  polyfillDisable keeps CSS / JSON module support out of the decision, so
+  browsers with native import maps but no CSS module scripts (Safari 16.4+,
+  Firefox) stay native too. This page uses neither feature.
+  ===========================================================================
+-->
+<script>
+  (function () {
+    var log = window.__earlyLog || function () {};
+
+    var nativeImportMaps = false;
+    try {
+      nativeImportMaps = typeof HTMLScriptElement !== 'undefined' &&
+        typeof HTMLScriptElement.supports === 'function' &&
+        HTMLScriptElement.supports('importmap');
+    } catch (e) { /* treated as unsupported */ }
+
+    var staticBlocks = true;
+    try { new Function('class A { static { } }'); } catch (e) { staticBlocks = false; }
+
+    var STATIC_BLOCK =
+      /static\s*\{\s*(?:\/\*[\s\S]*?\*\/\s*)?([A-Za-z_$][\w$]*)\.prototype\.([A-Za-z_$][\w$]*)\s*=\s*true;\s*\}/g;
+
+    function lowerStaticBlocks(source, url) {
+      var count = 0;
+      var out = source.replace(STATIC_BLOCK, function (match, cls, flag) {
+        return 'static __staticBlock' + (count++) + ' = void (' + cls + '.prototype.' + flag + ' = true);';
+      });
+      if (count) log('es-module-shims: rewrote ' + count + ' static block(s) in ' + url, 'ok');
+      // Any other shape would still be a syntax error here; say where.
+      if (/\bstatic\s*\{/.test(out)) log('es-module-shims: a static block of another shape remains in ' + url, 'err');
+      return out;
+    }
+
+    var options = {
+      polyfillDisable: ['css-modules', 'json-modules'],
+      noLoadEventRetriggers: true,
+      onpolyfill: function () {
+        log('es-module-shims: polyfill active' +
+          (staticBlocks ? '' : ' (with the static block rewrite)'), 'ok');
+      }
+    };
+
+    if (!staticBlocks) {
+      options.source = function (url, fetchOpts, parent, defaultSourceHook) {
+        return defaultSourceHook(url, fetchOpts, parent).then(function (result) {
+          if (result && typeof result.source === 'string' && result.source.indexOf('static') !== -1) {
+            result.source = lowerStaticBlocks(result.source, url);
+          }
+          return result;
+        });
+      };
+    }
+
+    window.esmsInitOptions = options;
+
+    log(nativeImportMaps && staticBlocks
+      ? 'es-module-shims: not used (native import maps)'
+      : 'es-module-shims: needed (native import maps: ' + nativeImportMaps +
+        ', static blocks: ' + staticBlocks + '); "polyfill active" follows when it takes over');
+  })();
+</script>
+<script async src="https://cdn.jsdelivr.net/npm/es-module-shims@2.8.4/dist/es-module-shims.js"
+        integrity="sha256-/mIMVmL4vZ9G5Kopzq4KLrUqAxVzwQWYv3Dy5Qp7PXw="
+        crossorigin="anonymous"></script>
+
+<!--
+  ===========================================================================
   IMPORT MAP
   Pins one three.js version on jsDelivr. A CORS-enabled CDN is what lets
   this page work both from file:// during local testing and from GitHub
@@ -759,7 +848,7 @@
   // stale cached page can be told apart from a current one at a glance.
   // Must match version.json at the repo root, in the same commit. The
   // self-update check below compares the two.
-  const VIEWER_VERSION = '2026-10-16a';
+  const VIEWER_VERSION = '2026-10-16b';
 
   const CONFIG = {
 
