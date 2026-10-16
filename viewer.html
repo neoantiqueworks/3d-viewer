@@ -23,6 +23,219 @@
 
 <!--
   ===========================================================================
+  EARLY LOGGER (classic script, the first script on the page)
+  Runs before the import map and the module, so it still reports when the
+  module never starts: a CDN import that fails, a syntax error in a
+  dependency, or an exception before the module's own log panel exists.
+  Only active with debug=1 in the URL; without it nothing is created.
+  Plain DOM and ES5 only, so it runs on old browsers too. It has its own
+  panel at the top (#earlyLog); the module's #debugLog sits at the bottom.
+  The lines are kept in window.__earlyLogLines so the module panel can be
+  fed from them later.
+  ===========================================================================
+-->
+<script>
+  (function () {
+    var debugOn = /[?&]debug=1(&|$)/.test(location.search);
+    // The module calls window.__earlyLog unconditionally; it must exist and
+    // stay silent when debug is off.
+    window.__earlyLog = function () {};
+    window.__earlyLogLines = [];
+    if (!debugOn) return;
+
+    var panel = null;
+    var pending = [];
+
+    // Same masking as the module's redactKeys(): the k parameter and anything
+    // shaped like a Google API key never appear in full.
+    function maskKey(key) {
+      if (!key) return '(none)';
+      if (key.length <= 8) return '****';
+      return key.slice(0, 4) + '...' + key.slice(-4);
+    }
+    var linkKey = '';
+    var keyMatch = location.search.match(/[?&]k=([^&]*)/);
+    if (keyMatch) {
+      try { linkKey = decodeURIComponent(keyMatch[1]).trim(); } catch (e) { linkKey = keyMatch[1]; }
+    }
+    function redact(text) {
+      var out = String(text);
+      if (linkKey) {
+        out = out.split(linkKey).join(maskKey(linkKey));
+        var encoded = encodeURIComponent(linkKey);
+        if (encoded !== linkKey) out = out.split(encoded).join(maskKey(linkKey));
+      }
+      return out.replace(/AIza[0-9A-Za-z_-]{35}/g, function (m) { return maskKey(m); });
+    }
+
+    function stamp() {
+      var d = new Date();
+      function pad(n, w) { n = String(n); while (n.length < w) n = '0' + n; return n; }
+      return pad(d.getHours(), 2) + ':' + pad(d.getMinutes(), 2) + ':' +
+        pad(d.getSeconds(), 2) + '.' + pad(d.getMilliseconds(), 3);
+    }
+
+    function ensurePanel() {
+      if (panel) return panel;
+      var root = document.body || document.documentElement;
+      if (!root) return null;
+      panel = document.createElement('div');
+      panel.id = 'earlyLog';
+      panel.style.cssText =
+        'position:fixed;left:10px;right:10px;top:10px;max-height:38vh;overflow-y:auto;' +
+        'z-index:2147483647;background:rgba(18,18,18,0.94);color:#ddd;' +
+        'font:11px/1.45 Menlo,Consolas,monospace;padding:6px 8px;border-radius:8px;' +
+        'white-space:pre-wrap;word-break:break-all;-webkit-user-select:text;user-select:text;';
+      // Tapping the panel shrinks it to one line, tapping again expands it.
+      panel.addEventListener('click', function () {
+        panel.style.maxHeight = panel.style.maxHeight === '1.6em' ? '38vh' : '1.6em';
+      });
+      root.appendChild(panel);
+      return panel;
+    }
+
+    function write(text, level) {
+      var line = stamp() + ' [early] ' + redact(text);
+      window.__earlyLogLines.push({ text: line, level: level || 'info' });
+      try {
+        if (level === 'err') console.error(line); else console.log(line);
+      } catch (e) { /* no console */ }
+      var p = ensurePanel();
+      if (!p) { pending.push([line, level]); return; }
+      while (pending.length) { var q = pending.shift(); appendLine(p, q[0], q[1]); }
+      appendLine(p, line, level);
+    }
+
+    function appendLine(p, line, level) {
+      var div = document.createElement('div');
+      div.style.color = level === 'err' ? '#ff8f8f' : (level === 'ok' ? '#8fdc8f' : '#ddd');
+      div.textContent = line;
+      p.appendChild(div);
+      p.scrollTop = p.scrollHeight;
+    }
+
+    window.__earlyLog = function (text, level) {
+      try { write(text, level); } catch (e) { /* never break the page */ }
+    };
+
+    function describe(value) {
+      if (value && value.stack) return String(value.message || value) + '\n' + value.stack;
+      try { return String(value); } catch (e) { return '(unprintable)'; }
+    }
+
+    // Uncaught exceptions, module ones included.
+    window.addEventListener('error', function (event) {
+      var target = event.target;
+      if (target && target !== window && target.tagName) {
+        // A resource that failed to load. Capture phase is needed: these
+        // events do not bubble. The module script element also gets one when
+        // one of its imports cannot be fetched.
+        var tag = target.tagName.toLowerCase();
+        var src = target.src || target.href || '(inline)';
+        if (tag === 'script') {
+          write('script load error: ' + src + ' (type ' + (target.type || 'classic') + ')', 'err');
+          // The browser does not say which import failed; fetch each import
+          // map entry once and report its status.
+          if (target.type === 'module') checkImportMap();
+        } else {
+          write(tag + ' load error: ' + src, 'err');
+        }
+        return;
+      }
+      write('error: ' + (event.message || '(no message)') +
+        ' at ' + (event.filename || '(no file)') + ':' + event.lineno + ':' + event.colno +
+        (event.error && event.error.stack ? '\n' + event.error.stack : ''), 'err');
+    }, true);
+
+    var importMapChecked = false;
+    function checkImportMap() {
+      if (importMapChecked) return;
+      importMapChecked = true;
+      var mapEl = document.querySelector('script[type="importmap"]');
+      if (!mapEl) { write('import map: element not found', 'err'); return; }
+      var imports;
+      try { imports = JSON.parse(mapEl.textContent).imports || {}; } catch (e) {
+        write('import map: JSON parse error: ' + e.message, 'err');
+        return;
+      }
+      if (typeof fetch !== 'function') { write('import map: fetch not available', 'err'); return; }
+      Object.keys(imports).forEach(function (name) {
+        var url = imports[name];
+        // A folder mapping is checked through one file the module imports.
+        if (url.charAt(url.length - 1) === '/') url += 'controls/OrbitControls.js';
+        fetch(url, { cache: 'no-store' }).then(function (r) {
+          write('import map ' + name + ': HTTP ' + r.status + ' ' + url, r.ok ? 'ok' : 'err');
+        }, function (err) {
+          write('import map ' + name + ': fetch failed (' + (err && err.message) + ') ' + url, 'err');
+        });
+      });
+    }
+
+    window.addEventListener('unhandledrejection', function (event) {
+      write('unhandled rejection: ' + describe(event.reason), 'err');
+    });
+
+    // WebGL context events on the renderer canvas. They do not bubble, so the
+    // listener sits on the document in the capture phase.
+    function onGlEvent(event) {
+      var t = event.target;
+      if (!t || t.id !== 'view') return;
+      write(event.type + (event.statusMessage ? ': ' + event.statusMessage : '') +
+        ' on #view', 'err');
+    }
+    document.addEventListener('webglcontextlost', onGlEvent, true);
+    document.addEventListener('webglcontextrestored', function (event) {
+      if (event.target && event.target.id === 'view') write('webglcontextrestored on #view', 'ok');
+    }, true);
+    document.addEventListener('webglcontextcreationerror', onGlEvent, true);
+
+    // Device facts.
+    write('early logger on');
+    write('user agent: ' + navigator.userAgent);
+    write('platform: ' + (navigator.platform || '(not reported)') +
+      ', maxTouchPoints: ' + navigator.maxTouchPoints);
+    write('device pixel ratio: ' + window.devicePixelRatio);
+    write('screen: ' + screen.width + ' x ' + screen.height +
+      ', viewport: ' + window.innerWidth + ' x ' + window.innerHeight);
+
+    var importMap = 'unknown';
+    try {
+      importMap = (typeof HTMLScriptElement !== 'undefined' &&
+        typeof HTMLScriptElement.supports === 'function')
+        ? String(HTMLScriptElement.supports('importmap'))
+        : 'HTMLScriptElement.supports not available';
+    } catch (e) { importMap = 'error: ' + e.message; }
+    write('import map supported: ' + importMap, importMap === 'true' ? 'ok' : 'err');
+
+    // A throwaway canvas, released right away: iOS limits live contexts.
+    function probe(kind) {
+      try {
+        var c = document.createElement('canvas');
+        var gl = c.getContext(kind);
+        if (!gl) return 'no';
+        var version = '';
+        try { version = ' (' + gl.getParameter(gl.VERSION) + ')'; } catch (e) { /* ignore */ }
+        var lose = gl.getExtension('WEBGL_lose_context');
+        if (lose) lose.loseContext();
+        return 'yes' + version;
+      } catch (e) {
+        return 'error: ' + e.message;
+      }
+    }
+    var gl2 = probe('webgl2');
+    var gl1 = probe('webgl');
+    write('WebGL2: ' + gl2, gl2.indexOf('yes') === 0 ? 'ok' : 'err');
+    write('WebGL: ' + gl1, gl1.indexOf('yes') === 0 ? 'ok' : 'err');
+
+    // The startup watchdog below reports here too when it gives up.
+    window.__earlyWatchdogFired = function () {
+      write('watchdog fired: the main script did not report ready within 15 s', 'err');
+    };
+  })();
+</script>
+
+<!--
+  ===========================================================================
   One viewer, no UI framework. An earlier build layered Fluent UI Web
   Components on top of this, but once every control had to be painted into a
   canvas to survive Samsung Internet's forced dark mode, Fluent's surfaces
@@ -498,6 +711,7 @@
     window.__viewerReady = false;
     setTimeout(function () {
       if (window.__viewerReady) return;
+      if (window.__earlyWatchdogFired) window.__earlyWatchdogFired();
       var loading = document.getElementById('loading');
       var error = document.getElementById('error');
       if (loading) loading.hidden = true;
@@ -521,6 +735,11 @@
   import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
   import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
+  // Early logger marker (see EARLY LOGGER in <head>). Static imports resolve
+  // before any module code runs, so this line appearing means every import
+  // arrived.
+  if (window.__earlyLog) window.__earlyLog('main script started', 'ok');
+
   /* =========================================================================
      CONFIG
      Everything tweakable lives here. DEBUG is the only switch that changes
@@ -540,7 +759,7 @@
   // stale cached page can be told apart from a current one at a glance.
   // Must match version.json at the repo root, in the same commit. The
   // self-update check below compares the two.
-  const VIEWER_VERSION = '2026-10-08e';
+  const VIEWER_VERSION = '2026-10-16a';
 
   const CONFIG = {
 
@@ -2858,6 +3077,9 @@
       ', background: ' + backgroundKey);
     loadModel();
   }
+
+  // Startup finished without throwing; the model load continues on its own.
+  if (window.__earlyLog) window.__earlyLog('main script finished init', 'ok');
 </script>
 </body>
 </html>
